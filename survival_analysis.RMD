@@ -148,9 +148,9 @@ histinfo<-hist(dat[,survival],
      las=1, 
      breaks=50)
 
-print(summary(dat[survival]))
-quantile(dat[survival], .30)
-quantile(dat[survival], .40)
+print(summary(dat[,survival]))
+quantile(dat[,survival], .30)
+quantile(dat[,survival], .40)
 
 # If no status, assume all obserations are non-censored
 if( is.null(params$status) || !(params$status %in% names(dat))) {
