@@ -208,7 +208,7 @@ survivorType = cut(as.matrix(dat[survival]), breaks = params$breaks,
 datClass <- dat
 datClass$survivorType <- survivorType
 
-variableSelections <- list()
+variableSelections <- list(fixed=params$fixed_inputs)
 
 #TODO: test for significant short/mid/long differences too.
 
