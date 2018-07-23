@@ -2,13 +2,13 @@
 title: "Survival Analysis"
 output: pdf_document
 params:
-  csvPath:          /rsrch1/ip/egates1/MICCAI_BraTS_2018_Data_Training/BraTS18_pyradiomicsout_tumor_segsubvolumes_withKi67CDERG_NLM_combined_survivalonly_SHORT.csv
-  outCsvName:       !r NUMM
+  csvPath:          exampledata.csv
+  outCsvName:       !r NULL
   survival:         survival
   status:           !r NULL 
-  regexp:           !r "(_Volume|firstorder|tumor_original_shape_Maximum|Sphericity)"
-  fixed_inputs:        age
-  exclude_inputs:      "(Energy|Entropy|AbsoluteDeviation)"  
+  regexp:           !r "firstorder"
+  fixed_inputs:     !r   NULL
+  exclude_inputs:   !r   NULL  
   hierarch:         !r FALSE
   nfold:               5
   leaveOneOut:      !r TRUE 
@@ -17,7 +17,7 @@ params:
   boruta:           !r TRUE
   univariate:       !r TRUE
   removeCorrelated: !r TRUE
-  rescale:           !r FALSE
+  rescale:          !r FALSE
   plot:             !r TRUE
   breaks:           !r c(-Inf,304,456,Inf)
 
@@ -198,7 +198,7 @@ if(params$plot){
 
  Next we use a multiple input cox model and stepwise AIC on the result.
 
- Bouta method (with correlation reduction) can be used with teh _boruta_ parameter.
+ Bouta method (with correlation reduction) can be used with the _boruta_ parameter.
 
 ```{r Univariate Filter, echo=FALSE, warning=FALSE, message=FALSE, fig.width=6, fig.height=7}
 
@@ -282,6 +282,13 @@ if(params$boruta){
 bor <- Boruta(x=datClass[, borutaInputs ], y=datClass[, "survivorType"], pValue=.35)
 variableSelections$boruta <- union(params$fixed_inputs, names(datClass[,borutaInputs ])[which(bor$finalDecision == "Confirmed")])
 
+#if boruta rejects everything, remove it from selections
+if(sum(bor$finalDecision=="Rejected")==length(borutaInputs) ){
+  print("Boruta rejected every variable, removing boruta selection from list of variables")
+  variableSelections$boruta <- NULL
+}
+
+
 print("Finished Boruta variable selection")
 print(bor)
 
@@ -338,7 +345,7 @@ multiPvals <- coef(summary(coxMultiModel))[,5]
 
 print("Multivariate cox model")
 print(coxMultiModel)
-#TODO: see if inline print statement between blocks prints this too
+
 
 variableSelections$multivariate <- union(params$fixed_inputs, names(multiPvals)[na.omit(multiPvals < 0.05)])
 
@@ -351,12 +358,8 @@ corrplot(cor(Filter(is.numeric,dat[variableSelections$multivariate]), use="pairw
    mar = c(1,2,2,0),
    order = "hclust" )
 }
+
 ```
-# Multivariate Cox model:
-
-`r print(summary(coxMultiModel))`
-
-
 # Finally, filter the model using stepwise AIC or recursive feature elimination
 
 
@@ -417,9 +420,9 @@ modelparams <- list(forest = list(method      = "rf",
                     #             MaxNWts = 10000,
                     #             trace   = FALSE,
                     #             maxit   = 100),
-#                     svm = list(method = "svmRadial")#,
-#LOGIT (glm) only uses two outputs
-                     logit = list(method = "glm")
+                     svm = list(method = "svmRadial")#,
+# LOGIT (glm) only uses two outputs
+#                     logit = list(method = "glm")
 
                      )
 
@@ -494,7 +497,7 @@ dat$predSurvivorType <- bestClassifier$pred$pred
 
 ```
 
-
+# CURRENTLY DISABLED:
 # Next: build a cox model to predict survival (leave-one-out) and train only on the cases from the same predicted short/long survival category. We also train a linear model in the same way for comparison.
 
 Cox model survival predictions use the median survival time from the estimated survival curve ( see references in ?survfit.coxph )
@@ -738,7 +741,7 @@ correlation cutoff: `params$cutoff`
 ```{r Equivalent variables, echo=FALSE}
 finalVars <- names(bestmod$trainingData)[-1]
 
-print("Best variable Set:\n")
+print("Best variable Set:")
 print(finalVars)
 
 equivalentVars <- list()
@@ -760,7 +763,7 @@ print(corVars)
 
 
 
-# Predictions on validation set using the holdout and teh best classifiers and 
+# Predictions on validation set using the holdout and the best classifiers and 
 holdout fold: `r params$foldID`
 
 ```{r validation set, echo=FALSE}
@@ -783,10 +786,10 @@ predType = cut(as.matrix(validationpreds), breaks = params$breaks,
                    labels=timelabs
                   )
 
-print("confusion matrix for continuous predictions")
+print("CONFUSION MATRIX FOR CONTINUOS PREDICTIONS")
 print( confusionMatrix(reference=realClass,predType) )
 
-print("confusion matrix for classifier")
+print("CONFUSION MATRIX FOR CLASSIFIER")
 
 print( confusionMatrix(reference=realClass,validationdat$predSurvivorType) )
 
@@ -795,7 +798,7 @@ print(sprintf("correlation (R-squared): %0.4f", cor(validationdatReduced[,surviv
 print(sprintf("RMSE: %0.4f", sqrt(mean((validationdatReduced[,survival]-validationpreds)^2))))
 
 
-kable(data.frame(Actual=validationdatReduced[,survival],PredictedClassContinuous=predType, ActualClass=realClass, PredictedClassClassifier=validationdat$predSurvivorType))
+kable(data.frame(Actual=validationdatReduced[,survival],PredictedContinuous=validationpreds,PredictedClassContinuous=predType, ActualClass=realClass, PredictedClassClassifier=validationdat$predSurvivorType))
 
 }
 
@@ -805,27 +808,71 @@ kable(data.frame(Actual=validationdatReduced[,survival],PredictedClassContinuous
 # Writing csv files with validation predictions
 
 ```{r write csv, echo=FALSE}
-predname <- paste("validationPreds",params$foldID,sep="_")
 
-if(predname %in% names(datFull)){
-  print(sprintf("Validation predictions for fold %s already found, compare differences below:", params$foldID))
-  print("existing predictions:")
-  print(datFull$predname)
-} else {
+#write cross-validation predictions
 
-datFull[which(datFull$validationFolds == params$foldID), predname] <- validationpreds
+
+if(!is.null(params$foldID)){
+  trainingpredname <- paste("trainindPreds_exceptfold",params$foldID,sep="")
+
+  if(trainingpredname %in% names(datFull)){
+    print(sprintf("cross-validation predictions for fold %s already found, compare differences below:", params$foldID))
+    print("existing predictions (may be out of order):")
+    kable(data.frame(existing=datFull[rownames(dat),trainingpredname],new=results$pred))
+    
+  } else {
+  datFull[trainingpredname] <- NA
+  datFull[rownames(dat)[results$rowIndex],trainingpredname] <- results$pred  #trickey line of code since results$rowIndex referes to rows of dat not datFull
+    }
+
+} else { #if no validation fold, write all predictions
+  trainingpredname <- "trainingPreds"
+  datFull[trainingpredname] <- NA
+  datFull[rownames(dat)[results$rowIndex],trainingpredname] <- results$pred  #trickey line of code since results$rowIndex referes to rows of dat not datFull
 }
+
+
+# write validation predictions
+if(!is.null(params$foldID)){
+
+predname <- paste("validationPreds_fold",params$foldID,sep="")
+
+
+  if(predname %in% names(datFull)){
+    print(sprintf("Validation predictions for fold %s already found, compare differences below:", params$foldID))
+    print("existing predictions:")
+    print(datFull$predname)
+  } else {
+
+datFull[predname] <- NA
+datFull[which(datFull$validationFolds == params$foldID), predname] <- validationpreds
+  }
+}
+
+print("summary of predictions:")
+
+if(!is.null(params$foldID)){
+  kable(datFull[,c(survival,predname,trainingpredname)])
+} else {
+  kable(datFull[,c(survival,trainingpredname)])
+}
+
+
 
 if(is.null(params$outCsvName)){
   if(!is.null(params$foldID)){
     outCsv <- sub(".csv",sprintf("_Fold%s_validation.csv",params$foldID),params$csvPath) 
   } else {
+    outCsv <- sub(".csv","_no_validation.csv",params$csvPath)
+  }
+ 
+} else {
     outCsv <- params$outCsvName
   }
-#    write.csv(datFull,outCsv,row.names=F)
-}
+  
+print(sprintf("writing csv with validation predictions to %s", outCsv))
+write.csv(datFull,outCsv,row.names=F)
 
-#TODO: Write CV predictions if no validation set
 
 ```
 
