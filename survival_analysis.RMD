@@ -139,7 +139,7 @@ if(!is.null(params$foldID)){
   dat <- dat[-validationidx,]
 }
 
-histinfo<-hist(dat[survival], 
+histinfo<-hist(dat[,survival], 
      main="Histogram of outcome", 
      xlab="outcome", 
      border="blue", 
