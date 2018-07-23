@@ -1,0 +1,827 @@
+---
+title: "Survival Analysis"
+output: pdf_document
+params:
+  csvPath:          /rsrch1/ip/egates1/MICCAI_BraTS_2018_Data_Training/BraTS18_pyradiomicsout_tumor_segsubvolumes_withKi67CDERG_NLM_combined_survivalonly_SHORT.csv
+  outCsvName:       !r NUMM
+  survival:         survival
+  status:           !r NULL 
+  regexp:           !r "(_Volume|firstorder|tumor_original_shape_Maximum|Sphericity)"
+  fixed_inputs:        age
+  exclude_inputs:      "(Energy|Entropy|AbsoluteDeviation)"  
+  hierarch:         !r FALSE
+  nfold:               5
+  leaveOneOut:      !r TRUE 
+  foldID:              1
+  cutoff:              0.7
+  boruta:           !r TRUE
+  univariate:       !r TRUE
+  removeCorrelated: !r TRUE
+  rescale:           !r FALSE
+  plot:             !r TRUE
+  breaks:           !r c(-Inf,304,456,Inf)
+
+---
+## General Survival Prediction
+Input parameter descriptions:
+
+outCsvname is the file name/path for thesamed csv with validation predictions. If null, uses the input csv name as a base
+
+regexp parameter is a regular expression to get input features
+
+fixed_inputs is a regular expression that provides clinical inputs (age, kps, etc.) to bypass variable selection and are used in every survival model.
+
+exclude_inputs (regexp) are features known to be outliers and are excluded from inputs that match regexp:
+
+breaks are time breakpoints (careful with units)! for short/mid/long survivival times. Current code can only handle either two categories ( breaks=c(-Inf,10,Inf) ) or three categories: breaks=c(0,10,15,Inf)
+
+hierarch adds predicted survivor type to all regresion modeling by adding predictedSurvivorType to fixed_inputs
+
+cutoff is a correlation threshold that roughly defines equivalent variables. It is used to 1) to filter inputs before boruta method, 2) determine how manysimilar variables to the final model inputs to print. Recommended to keep >0.7
+
+nfold breaks the data into n evenly distrubuted folds. Used with foldID to holdout a validation set.
+
+foldID (ex. 4) is used as the hold out set and the full script is run on just the remaining data (ex. fold 1,2,3 and 5 if nfold=5). Default NULL uses all folds as training.
+
+
+# Compiled: `r format(Sys.time(), "%Y-%b-%d %H:%M:%S")` 
+
+
+Print params to stdout: `r print(params)` 
+
+
+```{r libs, echo=FALSE}
+
+libs <- c("corrplot", "survival", "ggplot2", "caret", "knitr", "MASS", "Boruta", "gridExtra", "randomForest","reshape2","glmnet")
+
+invisible(lapply(libs, require,character.only=T))
+
+# seed for reproducibility.
+set.seed(25)
+
+```
+
+## A summary of the data:
+Please note: to remove missign NA values from the data individual cases with missing values are removed.
+Future versions may allow a choice to remove inputs (columns) or cases (rows)
+
+```{r Loading Data and Summary, echo=FALSE, warning=FALSE, message=FALSE, fig.width=6, fig.height=7}
+
+# load data
+datFull <- read.csv(params$csvPath)
+
+survival <- params$survival
+status   <- params$status
+inputs <- union(params$fixed_inputs,
+                grep(params$regexp, names(datFull),value=T))
+
+
+print(sprintf("%d rows and %d columns read from csv file: %s", nrow(datFull), ncol(datFull), params$csvPath))
+print(sprintf("%d inputs found with regexp parameter and fixed inputs", length(inputs)))
+
+
+# remove excluded inputs if defined
+if (!is.null(params$exclude_inputs)){
+  inputs <- union( setdiff(inputs, grep(params$exclude_inputs, names(datFull),value=T)), params$fixed_inputs)
+  print(sprintf("%d inputs remained after excluded inputs", length(inputs)))
+} else {
+  print("No excluded_inputs from parameters")
+}
+
+
+
+
+# remove unnecessary columns and clean NAs
+datCrop <- datFull[,c(inputs,survival,status)]
+
+
+
+#remove incomplete cases
+incompCases <- !complete.cases(datCrop)
+print("The following rows are excluded for missing data:")
+print(row.names(datFull)[incompCases])
+
+datCompleteCases <- datCrop[!incompCases,]
+
+if(nrow(datCompleteCases) < 5){
+  stop("Less than 5 rows had no missing input values")
+}
+
+# remove inputs with NA or infinite values (should do nothing if complete cases was applied)
+dat <- datCompleteCases[, (colSums(is.na(datCompleteCases)) == 0 ) & (sapply(datCompleteCases, function(x) sum(is.infinite(x)) ) == 0) ]
+
+
+# subset based on validation set if provided
+if(!is.null(params$foldID)){
+  set.seed(5)
+#TODO: translate validation indices back to full data frame
+  
+  if(!("validationFolds" %in% names(datFull)) ){
+    datFull$validationFolds <- rep(NA,nrow(datFull))
+    validationFolds <- createFolds(dat[,survival],k=params$nfold,list=F)
+    
+    # add kfold indices to data matrix
+    dat$validationFolds <- validationFolds
+    datFull[row.names(dat),"validationFolds"] <- validationFolds
+
+  } else {
+    print(sprintf("validationFolds column already exists in the csv, reading it instead of generating folds."))
+    dat$validationFolds <- datFull[row.names(dat),"validationFolds"]
+  }
+
+  validationidx <- which(validationFolds == params$foldID) #gives row numbers (not row names), this will not match the original (nonfiltered) data
+  print(paste("Leaving out ", params$validationID, " fold number ", params$foldID,sep=""))
+
+  #bad code: order of these two lines matters
+  validationdat <- dat[validationidx,] 
+
+  print("removing validation fold from data frame")
+  dat <- dat[-validationidx,]
+}
+
+print(summary(dat[survival]))
+
+# If no status, assume all obserations are non-censored
+if( is.null(params$status) || !(params$status %in% names(dat))) {
+  status <- "status"
+  dat[status] <- 1
+  print("Assuming no subjects censored, either no status is given or status variable not found") 
+  }
+
+#Plot overall survival curve 
+survObj <- Surv(as.matrix(dat[survival]), as.matrix(dat[status]))
+plot(survfit(survObj ~ 1), xlab = "Survival", ylab= "Survival Probability", col=1, main=sprintf("Survival curve, %d cases",nrow(dat) ))
+
+```
+
+## Mass plotting of histograms can be disabled with the _plot_ parameter
+
+`r length(inputs)` inputs are used for initial analysis.
+
+```{r Input Histograms, echo=FALSE, warning=FALSE, message=FALSE, fig.width=3, fig.height=3}
+
+if (length(inputs) > 500) {warning("greater than 500 inputs for plotting!!")}
+
+if(params$plot){
+
+  for (varname in inputs) {
+
+    if(!is.factor(dat[,varname])){
+
+      maxrow <- which(dat[,varname] == max(dat[,varname]))
+      hist(dat[,varname], col="gray", main = paste("Max in row:", maxrow), xlab=varname)
+      print(" ")
+    }
+  }
+}
+
+
+```
+
+## Survival Modeling:
+ Columns with NA are excluded from the cox model for being a linar combination of other columns
+
+ The HAZARD ratio is given by the *exp(coef)* column in the cox model output.
+
+ First we determine which variables are univariate correlated with survival using the cox model and standard linear correlation.
+
+ Next we use a multiple input cox model and stepwise AIC on the result.
+
+ Bouta method (with correlation reduction) can be used with teh _boruta_ parameter.
+
+```{r Univariate Filter, echo=FALSE, warning=FALSE, message=FALSE, fig.width=6, fig.height=7}
+
+mybreaks = params$breaks
+
+if( any(params$breaks %in% dat[,survival]) ){warn("One survival time is exactly coincident with a break value, this will create a NA")}
+
+if(length(mybreaks ) ==3) {
+ timelabs <- c("short","long")
+} else if(length(mybreaks) ==4){
+ timelabs <-c("short","mid","long")
+} else { stop("breaks must have length 3 or 4, ex: c(-Inf,10,Inf) for short/long") }
+
+survivorType = cut(as.matrix(dat[survival]), breaks = params$breaks,
+                   labels=timelabs
+                  )
+
+datClass <- dat
+datClass$survivorType <- survivorType
+
+variableSelections <- list()
+
+#TODO: test for significant short/mid/long differences too.
+
+#list of formulas, inputs automatically includes fixed inputs
+univFormulas <- sapply(inputs, function(x) as.formula(paste('survObj~',x)))
+
+#list of models
+coxUniModels <- lapply(univFormulas,
+       function(x) { coxph(x, data=dat) }
+)
+
+# Hazard ratio and CI
+univResults <- lapply(coxUniModels, function(x) {return(exp(cbind(coef(x),confint(x))))})
+
+# Wald test for betas
+univPvals <- lapply(coxUniModels, function(x) {summary(x)$waldtest["pvalue"]})
+
+#TODO: change p value threshold
+variableSelections$coxunivariate <- union(params$fixed_inputs, setdiff(inputs, inputs[univPvals > 0.05]) )#discard variables above threshold
+
+print("Univariate significant variables via Cox model:")
+print(variableSelections$coxunivariate)
+
+if(length(variableSelections$coxunivariate)>1){
+corrplot(cor(Filter(is.numeric,dat[variableSelections$coxunivariate]), use="pairwise"),
+   title = "Correlations for Cox Univariate method",
+   mar = c(1,2,2,0),
+   order = "hclust" )
+
+print("  ")
+}
+
+```
+
+
+# Non-cox variable selection based on linear correlation and Boruta method if enabled:
+```{r Boruta Variable, echo=FALSE, warning=FALSE, message=FALSE, fig.width=6, fig.height=7}
+
+print("Pre-processing to remove correlated variables before Boruta method")
+#pre-process with correlations
+ppMethods <- "zv"
+if(params$rescale)          {ppMethods <- c(ppMethods,"center","scale")}
+if(params$removeCorrelated) {ppMethods <- c(ppMethods, "corr")}
+
+Filteredinputs <- setdiff(inputs,params$fixed_inputs)
+# Might have a bug with zv and corr...
+
+#apply correlation removal (not to fixed inputs)
+pp <- preProcess(dat[Filteredinputs], method = ppMethods, cutoff=params$cutoff)
+
+print(pp)
+
+#get reduced input set/dataset
+borutaInputs <- union( names(predict(pp, newdata = dat[Filteredinputs])), params$fixed_inputs)
+
+
+if(params$boruta){
+
+#TODO: document boruta "Confirmed" vs "Tentative"
+bor <- Boruta(x=datClass[, borutaInputs ], y=datClass[, "survivorType"], pValue=.35)
+variableSelections$boruta <- union(params$fixed_inputs, names(datClass[,borutaInputs ])[which(bor$finalDecision == "Confirmed")])
+
+print("Finished Boruta variable selection")
+print(bor)
+
+
+if(length(variableSelections$boruta) > 1 & params$plot){
+
+correlations <- cor(Filter(is.numeric,dat[variableSelections$boruta]), use="pairwise")
+   corrplot(correlations,
+   title = "Correlations for Boruta method",
+   mar = c(1,2,2,0),
+   order = "hclust"  )
+
+print("  ")
+
+}
+}
+
+# Univariate (correlation) selection
+if(params$univariate){
+
+nums <- sapply(dat[inputs],is.numeric)
+nums <- names(nums)[nums] #get names not T/F
+pvals <- lapply(nums,
+       function(var) {          
+           test <- cor.test(dat[, c(var)], dat[, survival])
+           test$p.value #could use 1-pchisq(test$statistic, df= test$parameter)
+       })
+names(pvals) <- nums
+
+#TODO: adjust p-value threshold with parameter
+pvalThresh <- 0.15
+print(sprintf("p-value threshold for linear correlation, %f",pvalThresh))
+variableSelections$univariate <- union(nums[pvals < pvalThresh], params$fixed_inputs) #discard variables above threshold
+
+if(length(variableSelections$univariate)>1){
+corrplot(cor(Filter(is.numeric,dat[variableSelections$univariate]), use="pairwise"),
+   title = "Correlations for Linear Univariate method",
+   mar = c(1,2,2,0),
+   order = "hclust" )
+}
+}
+
+```
+
+
+## Further reduce the number of variables by making a multivariate cox model and checking for high correlations
+
+```{r Multivariate, echo=FALSE, warning=FALSE, message=FALSE, fig.width=6, fig.height=7}
+
+uniInputs <- variableSelections$coxunivariate
+
+coxMultiModel <- coxph(survObj~., data=dat[,union(params$fixed_inputs,uniInputs),drop=F])
+multiPvals <- coef(summary(coxMultiModel))[,5]
+
+print("Multivariate cox model")
+print(coxMultiModel)
+#TODO: see if inline print statement between blocks prints this too
+
+variableSelections$multivariate <- union(params$fixed_inputs, names(multiPvals)[na.omit(multiPvals < 0.05)])
+
+#TODO: correct for multiple comparisons
+
+
+if(length(variableSelections$multivariate)>1){
+corrplot(cor(Filter(is.numeric,dat[variableSelections$multivariate]), use="pairwise"),
+   title = "Correlations for Multivariate Cox  method",
+   mar = c(1,2,2,0),
+   order = "hclust" )
+}
+```
+# Multivariate Cox model:
+
+`r print(summary(coxMultiModel))`
+
+
+# Finally, filter the model using stepwise AIC or recursive feature elimination
+
+
+```{r stepwise AIC, echo=FALSE, warning=FALSE, message=FALSE, fig.width=6, fig.height=7}
+
+#need to make the model on complete cases only
+
+#ENH: dat should already be complete cases only
+# datComplete <- dat[complete.cases(dat[,c(status,survival,variableSelections$multivariate)]) ,
+#                                       c(status,survival,variableSelections$multivariate)    ]
+#
+
+#survObjComplete <- Surv(as.matrix(datComplete[survival]),as.matrix(datComplete[status]))
+
+coxAIC <- coxph(survObj ~ ., data=dat[,variableSelections$multivariate,drop=F])
+
+coxStep <- stepAIC(coxAIC, direction="both", trace=0)
+
+print("variables selected by stepwise AIC (not including fixed inputs)")
+print(coxStep$coefficients)
+
+variableSelections$aic <- union(params$fixed_inputs, names(coxStep$coefficients))
+
+
+if(length(variableSelections$aic) > 1 ){
+corrplot(cor(Filter(is.numeric,dat[variableSelections$aic]), use="pairwise"),
+   title = "Correlations for stepwise AIC method",
+   mar = c(1,2,2,0),
+   order = "hclust" )
+}
+```
+## Categorical Summary: We break the dataset into short vs long survival categories and use the predicted survival class as an additional feature
+ 
+```{r Classification, echo=FALSE, warning=FALSE, message=FALSE, fig.width=6, fig.height=7}
+
+#if(params$leaveOneOut){
+#predictedSurvivorType = cut(results$pred, breaks = breaks, labels=c("short","mid","long"))
+#}
+
+#kable(table((data.frame(predicted=predictedSurvivorType, actual=survivorType))))
+
+#TODO: make parameters different from continuous predictions for clarity
+#TODO: adjust models based on number of survivor categories
+#TODO: adjust for k-fold vs LOOCV
+modelparams <- list(forest = list(method      = "rf",
+                                  ntree       = 500,
+                                 #tuneGrid    = data.frame(.mtry = mtry),
+                                 #replace    = TRUE,
+                                 #na.action  = randomForest::na.roughfix,
+                                 importance  = FALSE,
+                                 predict.all = FALSE
+                                 ),
+
+                    #nnet = list(method = "nnet",
+                    #             #tuneGrid=data.frame(.size = 10, .decay = 0),
+                    #             #linout  = TRUE,
+                    #             skip    = TRUE,
+                    #             MaxNWts = 10000,
+                    #             trace   = FALSE,
+                    #             maxit   = 100),
+#                     svm = list(method = "svmRadial")#,
+#LOGIT (glm) only uses two outputs
+                     logit = list(method = "glm")
+
+                     )
+
+
+modelformula <- as.formula("survivorType~.")
+dataparams   <- list(form = modelformula,
+#                      data = dat[,c(params$target,Filteredinputs)],
+                      metric="Accuracy",
+                      trControl=trainControl(allowParallel  = T,
+                                             method = ifelse(params$leaveOneOut,"LOOCV", "repeatedcv"),
+                                             classProbs=TRUE,
+                                             returnResamp = "final",
+                                             savePredictions = "final",
+                                             #number = 10,
+                                             #repeats= 5,
+                                             verboseIter = F) # use method="none" to disable grid tuning for speed
+                     )  
+caretparams      <- lapply(modelparams,function(x) c(dataparams,x))
+
+#initialize outputs
+
+modelsClass   <- list()
+acc <- list()
+
+for(jjj in 1:length(variableSelections)){
+modeldata  <- datClass[,c("survivorType",variableSelections[[jjj]])]
+
+# RE seeding: Hawthorn et al, "The design and analysis of benchmark experiments" (2005)
+
+for (iii in 1:length(modelparams)){
+model_name <-paste("Class", names(variableSelections)[jjj], names(modelparams)[iii],sep="_")
+print(model_name)
+set.seed(3141) #seed before train to get same subsamples
+invisible(  modelsClass[[model_name]] <- do.call(caret::train, c(caretparams[[iii]], list(data=modeldata)))  )
+metric <- modelsClass[[model_name]]$metric
+
+#get best acuracy manually for LOOCV
+acc[[model_name]] <- max(modelsClass[[model_name]]$results[metric])
+
+}
+}
+
+#TODO: enable k-fold, check if this works with not LOOCV
+if(params$leaveOneOut){
+  maxacc <- max(unlist(acc))
+  maxmodels <- names(which(acc==maxacc))
+  bestClassifier <- modelsClass[[maxmodels[[1]]]] #pick first by default
+  resultsClass <- bestClassifier$pred
+
+}
+
+# print all model accuracies
+print("Table of accuracies by model and input variables")
+kable(unlist(acc))
+print(bestClassifier)
+print(caret::confusionMatrix(resultsClass$pred, reference = resultsClass$obs) )
+
+print("Concordance < 0.5 may be due to improper factor level ordering")
+print(survConcordance(survObj~as.numeric(resultsClass$pred)))
+
+
+# add predictions to variable selections if hierarchical
+
+if(params$hierarch){
+print("Adding predSurvivorType to all input sets")
+variableSelections <-  lapply(variableSelections, function(x) c("predSurvivorType",x))
+inputs <- c(inputs,"predSurvivorType")
+}
+
+#This line is the one that needs LOOCV
+dat$predSurvivorType <- bestClassifier$pred$pred
+
+```
+
+
+# Next: build a cox model to predict survival (leave-one-out) and train only on the cases from the same predicted short/long survival category. We also train a linear model in the same way for comparison.
+
+Cox model survival predictions use the median survival time from the estimated survival curve ( see references in ?survfit.coxph )
+
+```{r Hierarchical Linear and cox predictions, echo=FALSE, warning=FALSE, message=FALSE}
+
+#HACK disable
+#TODO: review and reenable this code
+if(FALSE){
+#pseudo-code
+#  split data (LOOCV)
+#  for each short/mid/long build a linear model
+#  predict on last point
+hierarchPreds <- numeric(nrow(dat))
+coxPreds <- numeric(nrow(dat))
+
+for (nn in 1:nrow(dat)) {
+ #from previous LOOCV
+
+ 
+ predictedSurvivorType <- bestClassifier$pred$pred
+ cols <- c(survival,setdiff(variableSelections$univariate,"predSurvivorType"))
+
+ trainingData <- subset(dat[-nn,],predictedSurvivorType[-nn] == predictedSurvivorType[nn],select=cols)
+
+ 
+#fit model with data subset
+linMod <- lm( as.formula(paste(survival,"~.")), data=trainingData)
+hierarchPreds[nn] <- predict(linMod,dat[nn,])
+
+#Hack: assume best model is linear on 5 predictors (multivariate cox)
+
+#fit cox model for preds (use median survival) 
+fit <- coxph(survObj[-nn] ~ ., data=dat[-nn,setdiff(variableSelections$univariate,"predSurvivorType")])
+coxPreds[nn] <- unname(summary(survfit(fit,newdata=dat[nn,variableSelections$univariate]))$table["median"])
+}
+
+print("Survival R(2) for linear model:")
+print(cor(hierarchPreds,dat[[survival]])^2)
+
+print("Survival R(2) for cox model Leave-one-out predictions")
+print(cor(coxPreds,dat[[survival]])^2)
+}
+```
+
+# Now, predict survival using all model/variable combinations. Default is leave-one-out cross validation and the predicted survivor type (short/mid/long) is used as an input feature for every model.
+
+```{r Modeling (may take some time), echo=FALSE, warning=FALSE, message=FALSE}
+
+#Modeling, dataparams are arguements to caret::train
+# CONTINUOUS PREDICTION
+#TODO: distinguish this from the categorical prediction
+
+modelparams <- list(forest = list(method      = "rf",
+                                  ntree       = 500,
+                                 #tuneGrid    = data.frame(.mtry = mtry),
+                                 #replace    = TRUE,
+                                 #na.action  = randomForest::na.roughfix,
+                                 importance  = FALSE,
+                                 predict.all = FALSE
+                                 ),
+                    linear = list(method="lm")
+#                    nnet = list(method = "nnet",
+#                                 #tuneGrid=data.frame(.size = 10, .decay = 0),
+#                                 #linout  = TRUE,
+#                                 skip    = TRUE,
+#                                 MaxNWts = 10000,
+#                                 trace   = FALSE,
+#                                 maxit   = 100)#,
+#GLMNET bugged for DF data
+#                     glmnet = list(method="glmnet")#,                     
+#                     svm = list(method = "svmRadial")
+                     )
+
+modelformula <- as.formula(paste(params$survival,"~."))
+
+#TODO: option to select RMSE vs Rsquared
+dataparams   <- list(form = modelformula,
+#                      data = dat[,c(params$target,Filteredinputs)],
+                      metric="Rsquared", #other option: AUC?
+                      trControl=trainControl(allowParallel  = T,
+                                             method = ifelse(params$leaveOneOut,"LOOCV", "repeatedcv"),
+                                             classProbs=FALSE,
+                                             returnResamp = "final",
+                                             savePredictions = "final",
+                                             #number = 10,
+                                             #repeats= 5,
+                                             verboseIter = F) # use method="none" to disable grid tuning for speed
+                     )  
+caretparams      <- lapply(modelparams,function(x) c(dataparams,x))
+
+
+#fix alpha = 1 (only l1 regularization) for glmnet, lambda values taken from BraTS analysis
+if ("glmnet" %in% names(caretparams)){
+  caretparams$glmnet[["tuneGrid"]] = data.frame(alpha=rep(1,3),lambda=2.594666*c(0.1,1,10))
+}
+
+#initialize outputs
+models    <- list()
+acc <- list()
+
+for(jjj in 1:length(variableSelections)){
+modeldata  <- dat[,c(params$survival,variableSelections[[jjj]])]
+
+# RE seeding: Hawthorn et al, "The design and analysis of benchmark experiments" (2005)
+
+for (iii in 1:length(modelparams)){
+model_name <-paste(names(variableSelections)[jjj], names(modelparams)[iii],sep="_")
+print(model_name)
+set.seed(3141) #seed before train to get same subsamples
+invisible(  models[[model_name]] <- do.call(caret::train, c(caretparams[[iii]], list(data=modeldata)))  )
+metric <- models[[model_name]]$metric
+
+#get best acuracy manually for LOOCV
+acc[[model_name]] <- max(models[[model_name]]$results[metric])
+
+}
+}
+
+
+```
+# Finding the best model for continuous predictions:
+
+```{r Finding best model and plotting, echo = FALSE, fig.width=8, fig.height=10}
+if(params$leaveOneOut){
+  maxacc <- max(unlist(acc),na.rm=T)
+  maxmodels <- names(which(acc==maxacc))
+  bestmod <- models[[maxmodels[[1]]]] #pick first by default
+  modpars <- bestmod$bestTune
+  results <- bestmod$pred
+  
+  #plot
+  par(mar=c(8,5,1,1))
+  barplot(unlist(acc),las=2, ylim=c(0,1),
+    ylab=paste("training set LOOCV",metric))
+ 
+  #pred vs obs
+  plot(x=results$pred,y=results$obs, xlab="Predicted survival", ylab="Actual survival",
+       xlim=c(0,max(dat[[survival]])), ylim=c(0,max(dat[[survival]]))
+      )
+   
+} else {
+  rs <- resamples(models)
+  print(summary(object = rs))
+  
+  acc        <- rs$values[,grepl(metric, names(rs$values))]
+  names(acc) <- rs$models
+  maxacc <- max(apply(acc,2,mean))
+  maxmodels <- rs$models[apply(acc,2,mean)==maxacc]
+  
+  # plot +1 to col arg keeps one box from being black
+  par(mar=c(8,5,1,1))
+  boxplot(acc,col=(as.numeric(as.factor(rs$methods))+1), las=2,
+    ylab=paste("training set cross-validation",metric) )
+  legend("bottomright", legend=unique(rs$methods),
+    fill=(as.numeric(as.factor(rs$methods))+1) )
+}
+
+```
+
+# Best model(s): `r maxmodels`
+
+`r sprintf("%s: %.4f", metric, maxacc)`
+
+
+
+```{r Output model,echo = FALSE}
+print("C index (Concordance) for best model: 0.5 represents random prediction")
+print(survConcordance(survObj ~ results$pred))
+
+print("Best model(s) and their inputs (ignore .outcome, it is not used in training)")
+lapply(maxmodels, function(x) {print(x); print(models[[x]]); names(models[[x]]$trainingData)})
+
+results <- bestmod$pred
+
+#predict function uses final model by default
+#compare training, testing errors
+results$training_pred <- predict(bestmod,newdata=bestmod$trainingData[results$rowIndex,])
+results$training_err <- results$training_pred - results$obs
+results$testing_err <- results$pred - results$obs
+
+p1 <- ggplot(data=results) +
+geom_point(aes(x=obs,y=pred)) +
+ylab("Predicted (test set)") +
+xlab("Observed") +
+theme_light(base_size=12)
+
+p2 <- ggplot(data=results) +
+geom_point(aes(x=obs,y=training_pred)) +
+ylab("Predicted (training set)") +
+xlab("Observed") +
+theme_light(base_size=12)
+
+p3 <- ggplot(data=results) +
+geom_point(aes(x=pred,y=training_pred,col=obs)) +
+labs(color="Actual") +
+scale_color_gradientn(colours=rainbow(5)) +
+ylab("Predicted (testing set)") +
+xlab("Predicted (training set)") +
+theme_light(base_size=12)
+
+
+#residual error vs training prediction
+
+p4 <- ggplot(data=results) +
+geom_point(aes(x=testing_err,y=training_pred,col=obs)) +
+labs(color="Actual") +
+scale_color_gradientn(colours=rainbow(5)) +
+ylab("Predicted (training set)") +
+xlab("Residual error (test set prediction - actual)") +
+theme_light(base_size=12)
+
+
+#display plots
+p1
+p2
+p3
+p4
+
+
+#Waterfall ish plot of predictions
+meltres <- melt(results[,c("obs","training_err","testing_err")] ,id.var="obs")
+
+p5 <- ggplot(data=meltres) +
+      geom_point(aes(x=obs, y=value, shape=variable) ) + 
+#      geom_point(aes(x=obs, y=training_err), shape=3 ) +
+      scale_shape_manual(values = c(1,2),labels = c("training error","testing error"),name="type") +
+      labs(x="Observed survival", y="Error") +
+      theme_light(base_size=12)
+#      geom_line(aes(x=obs,y=obs), linetype = "dashed", col = "gray")
+
+p5
+
+
+```
+
+# Equivalent variables: defined by tight correlation
+correlation cutoff: `params$cutoff`
+
+
+```{r Equivalent variables, echo=FALSE}
+finalVars <- names(bestmod$trainingData)[-1]
+
+print("Best variable Set:\n")
+print(finalVars)
+
+equivalentVars <- list()
+cormat <- cor(dat[,inputs])
+
+for(nam in finalVars){
+  #check for correlation
+  corVars <- cormat[cormat[,nam]>params$cutoff,nam,drop=F]
+
+  equivalentVars[[nam]] = corVars
+
+print(paste("Variables correlated with: ",nam,sep=""))
+#kable(corVars)
+print(corVars)
+}
+
+```
+
+
+
+
+# Predictions on validation set using the holdout and teh best classifiers and 
+holdout fold: `r params$foldID`
+
+```{r validation set, echo=FALSE}
+
+if(!is.null(params$foldID)){
+#if(FALSE){
+
+validationdat$predSurvivorType <- predict(bestClassifier,newdata=validationdat)
+validationdatReduced <- validationdat[,c(finalVars,survival)]
+validationpreds <- predict(bestmod, newdata=validationdatReduced)
+
+#get validation accuracy
+
+realClass <- cut(validationdat[,survival], breaks = params$breaks,
+                   labels=timelabs
+                  )
+
+
+predType = cut(as.matrix(validationpreds), breaks = params$breaks,
+                   labels=timelabs
+                  )
+
+print("confusion matrix for continuous predictions")
+print( confusionMatrix(reference=realClass,predType) )
+
+print("confusion matrix for classifier")
+
+print( confusionMatrix(reference=realClass,validationdat$predSurvivorType) )
+
+print("Table of predictions and actual values for reference")
+print(sprintf("correlation (R-squared): %0.4f", cor(validationdatReduced[,survival],validationpreds)^2))
+print(sprintf("RMSE: %0.4f", sqrt(mean((validationdatReduced[,survival]-validationpreds)^2))))
+
+
+kable(data.frame(Actual=validationdatReduced[,survival],PredictedClassContinuous=predType, ActualClass=realClass, PredictedClassClassifier=validationdat$predSurvivorType))
+
+}
+
+
+```
+
+# Writing csv files with validation predictions
+
+```{r write csv, echo=FALSE}
+predname <- paste("validationPreds",params$foldID,sep="_")
+
+if(predname %in% names(datFull)){
+  print(sprintf("Validation predictions for fold %s already found, compare differences below:", params$foldID))
+  print("existing predictions:")
+  print(datFull$predname)
+} else {
+
+datFull[which(datFull$validationFolds == params$foldID), predname] <- validationpreds
+}
+
+if(is.null(params$outCsvName)){
+  if(!is.null(params$foldID)){
+    outCsv <- sub(".csv",sprintf("_Fold%s_validation.csv",params$foldID),params$csvPath) 
+  } else {
+    outCsv <- params$outCsvName
+  }
+#    write.csv(datFull,outCsv,row.names=F)
+}
+
+#TODO: Write CV predictions if no validation set
+
+```
+
+
+
+
+
+
+
+
