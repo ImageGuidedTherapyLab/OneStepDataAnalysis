@@ -205,17 +205,49 @@ By default removes columns with zero variance and discards variables correlated 
 
 
 #coerce to factor if needed
+# careful with factor levels
 print(sprintf("target variable %s ",params$target) )  
+
+
+
 if(!is.factor(dsraw[,params$target])){
   dsraw[params$target]<- as.factor(dsraw[,params$target])
-  levels(dsraw[,params$target])<- c("control","case")
-  params$positive_class <- "case"
+  print("changed target variable to factor")
+  print(sprintf("initial level: %s", levels(dsraw[,params$target])))
+
+  if(!is.null(params$positive_class)) {
+  positive_class <- params$positive_class
+  } else {
+#   stop(params$positive_class)
+  positive_class <- "case"
+  }
+
+  levels(dsraw[,params$target]) <- c("control",positive_class)  
+  print(sprintf("reassigned target levels to: %s", levels(dsraw[,params$target])))
 }
+
+if(!is.null(params$positive_class)) {
+  positive_class <- params$positive_class
+} else {
+  positive_class <- levels(dsraw[,params$target])[2]
+  print(sprintf("assuming positive class is: %s", positive_class))
+}
+
+#check for positive class in factor levels
+if(!(positive_class %in% levels(dsraw[,params$target])) ){
+  stop(sprintf("positive class %s  not found in levels of target variable %s", positive_class, levels(dsraw[,params$target])))
+}
+
 
 #check if binary
 if(dsraw[,params$target] %>% levels %>% length !=2){
     stop("Target must have two levels")
 }   
+
+#rename positive class if needed
+#levels(dsraw[,params$target])<- c("control","case")
+#positive_class <- "case"
+
 
 #remove columns where all values are NA
 # REMOVE ROWS WITH NA
@@ -287,6 +319,7 @@ if(Filteredinputs %>% length <= 30){
    corrplot(correlations,
    title = "Correlations for all variables",
    mar = c(1,2,2,0)  )
+   print(" ")
   }
 
 #genetic
