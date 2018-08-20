@@ -10,16 +10,16 @@ params:
   fixed_inputs:     !r   NULL
   exclude_inputs:   !r   NULL  
   hierarch:         !r FALSE
-  nfold:               5
+  nfold:            !r NULL
   leaveOneOut:      !r TRUE 
-  foldID:              1
+  foldID:           !r NULL
   cutoff:              0.7
   boruta:           !r TRUE
   univariate:       !r TRUE
   removeCorrelated: !r TRUE
   rescale:          !r FALSE
   plot:             !r TRUE
-  breaks:           !r c(-Inf,304,456,Inf)
+  breaks:           !r NULL
 
 ---
 ## General Survival Prediction
@@ -144,7 +144,7 @@ histinfo<-hist(dat[,survival],
      xlab="outcome", 
      border="blue", 
      col="green",
-     xlim=c(0,100),
+#     xlim=c(0,100),
      las=1, 
      breaks=50)
 
@@ -202,9 +202,17 @@ if(params$plot){
 
 ```{r Univariate Filter, echo=FALSE, warning=FALSE, message=FALSE, fig.width=6, fig.height=7}
 
-mybreaks = params$breaks
 
-if( any(params$breaks %in% dat[,survival]) ){warning("One survival time is exactly coincident with a break value, this will create a NA")}
+if(!is.null(params$breaks)){
+  mybreaks = params$breaks
+} else {
+  print("No time breaks given, cutting survival times into two equal groups")
+  mybreaks = c(-Inf,median(dat[,survival]),Inf)
+}
+
+
+
+if( any(mybreaks %in% dat[,survival]) ){warning("One survival time is exactly coincident with a break value, this will create a NA")}
 
 if(length(mybreaks ) ==3) {
  timelabs <- c("short","long")
@@ -212,7 +220,7 @@ if(length(mybreaks ) ==3) {
  timelabs <-c("short","mid","long")
 } else { stop("breaks must have length 3 or 4, ex: c(-Inf,10,Inf) for short/long") }
 
-survivorType = cut(as.matrix(dat[survival]), breaks = params$breaks,
+survivorType = cut(as.matrix(dat[survival]), breaks = mybreaks,
                    labels=timelabs
                   )
 
@@ -786,7 +794,7 @@ predType = cut(as.matrix(validationpreds), breaks = params$breaks,
                    labels=timelabs
                   )
 
-print("CONFUSION MATRIX FOR CONTINUOS PREDICTIONS")
+print("CONFUSION MATRIX FOR CONTINUOUS PREDICTIONS")
 print( confusionMatrix(reference=realClass,predType) )
 
 print("CONFUSION MATRIX FOR CLASSIFIER")
@@ -813,7 +821,7 @@ kable(data.frame(Actual=validationdatReduced[,survival],PredictedContinuous=vali
 
 
 if(!is.null(params$foldID)){
-  trainingpredname <- paste("trainindPreds_exceptfold",params$foldID,sep="")
+  trainingpredname <- paste("LOOCVPreds_exceptfold",params$foldID,sep="")
 
   if(trainingpredname %in% names(datFull)){
     print(sprintf("cross-validation predictions for fold %s already found, compare differences below:", params$foldID))
@@ -826,7 +834,7 @@ if(!is.null(params$foldID)){
     }
 
 } else { #if no validation fold, write all predictions
-  trainingpredname <- "trainingPreds"
+  trainingpredname <- "LOOCVPreds"
   datFull[trainingpredname] <- NA
   datFull[rownames(dat)[results$rowIndex],trainingpredname] <- results$pred  #trickey line of code since results$rowIndex referes to rows of dat not datFull
 }
@@ -860,19 +868,22 @@ if(!is.null(params$foldID)){
 
 
 if(is.null(params$outCsvName)){
-  if(!is.null(params$foldID)){
-    outCsv <- sub(".csv",sprintf("_Fold%s_validation.csv",params$foldID),params$csvPath) 
-  } else {
-    outCsv <- sub(".csv","_no_validation.csv",params$csvPath)
-  }
+  print("No output csv file specified")
+
+# Option to auto generate csv name
+#  if(!is.null(params$foldID)){
+#    outCsv <- sub(".csv",sprintf("_Fold%s_validation.csv",params$foldID),basename(params$csvPath)) 
+#  } else {
+#    outCsv <- sub(".csv","_no_validation.csv",basename(params$csvPath))
+#  }
  
 } else {
     outCsv <- params$outCsvName
-  }
+
   
 print(sprintf("writing csv with validation predictions to %s", outCsv))
 write.csv(datFull,outCsv,row.names=F)
-
+}
 
 ```
 
