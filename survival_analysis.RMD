@@ -227,7 +227,13 @@ survivorType = cut(as.matrix(dat[survival]), breaks = mybreaks,
 datClass <- dat
 datClass$survivorType <- survivorType
 
-variableSelections <- list(fixed=params$fixed_inputs)
+
+variableSelections <- list()
+
+if(!is.null(params$fixed_inputs)){
+  variableSelections$fixed <- params$fixed_inputs
+}
+
 
 #TODO: test for significant short/mid/long differences too.
 
@@ -291,7 +297,7 @@ bor <- Boruta(x=datClass[, borutaInputs ], y=datClass[, "survivorType"], pValue=
 variableSelections$boruta <- union(params$fixed_inputs, names(datClass[,borutaInputs ])[which(bor$finalDecision == "Confirmed")])
 
 #if boruta rejects everything, remove it from selections
-if(sum(bor$finalDecision=="Rejected")==length(borutaInputs) ){
+if(!any(bor$finalDecision=="Confirmed") ) {
   print("Boruta rejected every variable, removing boruta selection from list of variables")
   variableSelections$boruta <- NULL
 }
@@ -420,7 +426,7 @@ modelparams <- list(forest = list(method      = "rf",
                                  importance  = FALSE,
                                  predict.all = FALSE
                                  ),
-
+#                    xgboost = list(method = "xgbTree"),
                     #nnet = list(method = "nnet",
                     #             #tuneGrid=data.frame(.size = 10, .decay = 0),
                     #             #linout  = TRUE,
@@ -428,7 +434,8 @@ modelparams <- list(forest = list(method      = "rf",
                     #             MaxNWts = 10000,
                     #             trace   = FALSE,
                     #             maxit   = 100),
-                     svm = list(method = "svmRadial")#,
+                     svm = list(method = "svmRadial"),
+                     gausspr = list(method="gaussprRadial")#,
 # LOGIT (glm) only uses two outputs
 #                     logit = list(method = "glm")
 
@@ -567,7 +574,8 @@ modelparams <- list(forest = list(method      = "rf",
                                  importance  = FALSE,
                                  predict.all = FALSE
                                  ),
-                    linear = list(method="lm")
+#                    xgboost = list(method = "xgbTree"),
+                    linear = list(method="lm"),
 #                    nnet = list(method = "nnet",
 #                                 #tuneGrid=data.frame(.size = 10, .decay = 0),
 #                                 #linout  = TRUE,
@@ -578,6 +586,7 @@ modelparams <- list(forest = list(method      = "rf",
 #GLMNET bugged for DF data
 #                     glmnet = list(method="glmnet")#,                     
 #                     svm = list(method = "svmRadial")
+                     gausspr = list(method="gaussprRadial")#,
                      )
 
 modelformula <- as.formula(paste(params$survival,"~."))
@@ -743,7 +752,7 @@ p5
 ```
 
 # Equivalent variables: defined by tight correlation
-correlation cutoff: `params$cutoff`
+correlation cutoff: `r params$cutoff`
 
 
 ```{r Equivalent variables, echo=FALSE}
