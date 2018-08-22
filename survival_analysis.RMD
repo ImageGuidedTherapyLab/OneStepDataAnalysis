@@ -231,7 +231,7 @@ datClass$survivorType <- survivorType
 variableSelections <- list()
 
 #use fixed only if length > 1 (avoid bugs)
-if(!is.null(params$fixed_inputs) & length(params$fixed_inputs) > 1){
+if(!is.null(params$fixed_inputs) & length(params$fixed_inputs) > 3){
   variableSelections$fixed <- params$fixed_inputs
 }
 
