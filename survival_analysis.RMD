@@ -169,7 +169,7 @@ plot(survfit(survObj ~ 1), xlab = "Survival", ylab= "Survival Probability", col=
 
 `r length(inputs)` inputs are used for initial analysis.
 
-```{r Input Histograms, echo=FALSE, warning=FALSE, message=FALSE, fig.width=3, fig.height=3}
+```{r Input Histograms, echo=FALSE, warning=FALSE, message=FALSE, fig.width=3.5, fig.height=5}
 
 if (length(inputs) > 500) {warning("greater than 500 inputs for plotting!!")}
 
@@ -181,6 +181,7 @@ if(params$plot){
 
       maxrow <- which(dat[,varname] == max(dat[,varname]))
       hist(dat[,varname], col="gray", main = paste("Max in row:", maxrow), xlab=varname)
+      plot(dat[,varname], dat[,survival], xlab=varname, ylab=survival, pch=21, bg='gray',col='black')
       print(" ")
     }
   }
