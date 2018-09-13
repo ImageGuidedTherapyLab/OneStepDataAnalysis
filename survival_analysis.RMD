@@ -775,6 +775,9 @@ for(nam in finalVars){
 print(paste("Variables correlated with: ",nam,sep=""))
 #kable(corVars)
 print(corVars)
+
+corrplot(cormat[cormat[,nam]>params$cutoff,cormat[,nam]>params$cutoff,drop=F])
+
 }
 
 ```
