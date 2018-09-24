@@ -284,12 +284,19 @@ Filteredinputs <- setdiff(inputs,params$fixed_inputs)
 # Might have a bug with zv and corr...
 
 #apply correlation removal (not to fixed inputs)
-pp <- preProcess(dat[Filteredinputs], method = ppMethods, cutoff=params$cutoff)
 
-print(pp)
+if(length(Filteredinputs)>1){
+  pp <- preProcess(dat[Filteredinputs], method = ppMethods, cutoff=params$cutoff)
 
-#get reduced input set/dataset
-borutaInputs <- union( names(predict(pp, newdata = dat[Filteredinputs])), params$fixed_inputs)
+  print(pp)
+
+  #get reduced input set/dataset
+  borutaInputs <- union( names(predict(pp, newdata = dat[Filteredinputs])), params$fixed_inputs)
+} else {
+  print("Only 1 input, no correlation reduction before boruta")
+  borutaInputs <- union(Filteredinputs,params$fixed_inputs)
+}
+
 
 
 if(params$boruta){
@@ -408,6 +415,8 @@ corrplot(cor(Filter(is.numeric,dat[variableSelections$aic]), use="pairwise"),
 }
 ```
 ## Categorical Summary: We break the dataset into short vs long survival categories and use the predicted survival class as an additional feature
+
+# Modeling does NOT include censored data
  
 ```{r Classification, echo=FALSE, warning=FALSE, message=FALSE, fig.width=6, fig.height=7}
 
@@ -465,7 +474,14 @@ modelsClass   <- list()
 acc <- list()
 
 for(jjj in 1:length(variableSelections)){
-modeldata  <- datClass[,c("survivorType",variableSelections[[jjj]])]
+
+#take uncensored rows
+
+if(! is.null(params$status)){
+  modeldata  <- datClass[datClass[,params$status]==1,c("survivorType",variableSelections[[jjj]])]
+} else {
+  modeldata  <- datClass[,c("survivorType",variableSelections[[jjj]])]
+}
 
 # RE seeding: Hawthorn et al, "The design and analysis of benchmark experiments" (2005)
 
@@ -492,6 +508,7 @@ if(params$leaveOneOut){
 }
 
 # print all model accuracies
+print(sprintf("%d rows used for classification", nrow(modeldata)))
 print("Table of accuracies by model and input variables")
 kable(unlist(acc))
 print(bestClassifier)
@@ -619,8 +636,12 @@ models    <- list()
 acc <- list()
 
 for(jjj in 1:length(variableSelections)){
-modeldata  <- dat[,c(params$survival,variableSelections[[jjj]])]
 
+if(! is.null(params$status) ){
+  modeldata  <- dat[dat[,params$status]==1 , c(params$survival,variableSelections[[jjj]])]
+} else {
+  modeldata  <- dat[, c(params$survival,variableSelections[[jjj]])]
+}
 # RE seeding: Hawthorn et al, "The design and analysis of benchmark experiments" (2005)
 
 for (iii in 1:length(modelparams)){
@@ -637,6 +658,7 @@ acc[[model_name]] <- max(models[[model_name]]$results[metric])
 }
 
 
+print(sprintf("%d rows used for regression modeling", nrow(modeldata)))
 ```
 # Finding the best model for continuous predictions:
 
