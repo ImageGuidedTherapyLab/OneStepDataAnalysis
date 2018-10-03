@@ -181,7 +181,7 @@ if(params$plot){
 
       maxrow <- which(dat[,varname] == max(dat[,varname]))
       hist(dat[,varname], col="gray", main = paste("Max in row:", maxrow), xlab=varname)
-      plot(dat[,varname], dat[,survival], xlab=varname, ylab=survival, pch=21, bg='gray',col='black')
+      plot(dat[,varname], dat[,survival], xlab=varname, ylab=survival, pch=21, bg='gray',col='black', main=sprintf("Pearson r: %0.3f",cor(dat[,varname],dat[,survival],method="pearson")))
       print(" ")
     }
   }
