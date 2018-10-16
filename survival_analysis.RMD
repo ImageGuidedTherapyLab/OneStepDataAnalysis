@@ -520,7 +520,7 @@ print("Concordance < 0.5 may be due to improper factor level ordering")
 fullClassPreds <- numeric(nrow(survObj))
 
 fullClassPreds[which(datClass[,status]!= 0)] = bestClassifier$pred$pred
-fullClassPreds[which(datClass[,status]== 0)] = predict(bestClassifier$finalModel,datClass[datClass[status] != 1,]) #make predictions on censored obs
+fullClassPreds[which(datClass[,status]== 0)] = predict(bestClassifier,datClass[datClass[status] != 1,]) #make predictions on censored obs
 
 #WIP make this concordance meaningful
 print("Warning: concordance for class predictions might be erroneous") 
