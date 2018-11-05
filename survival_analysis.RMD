@@ -169,7 +169,7 @@ plot(survfit(survObj ~ 1), xlab = "Survival", ylab= "Survival Probability", col=
 
 `r length(inputs)` inputs are used for initial analysis.
 
-```{r Input Histograms, echo=FALSE, warning=FALSE, message=FALSE, fig.width=3, fig.height=3}
+```{r Input Histograms, echo=FALSE, warning=FALSE, message=FALSE, fig.width=3.5, fig.height=5}
 
 if (length(inputs) > 500) {warning("greater than 500 inputs for plotting!!")}
 
@@ -180,7 +180,8 @@ if(params$plot){
     if(!is.factor(dat[,varname])){
 
       maxrow <- which(dat[,varname] == max(dat[,varname]))
-      hist(dat[,varname], col="gray", main = paste("Max in row:", maxrow), xlab=varname)
+      hist(dat[dat[,status]==1,varname], col="gray", main = paste("Max in row:", maxrow), xlab=varname)
+      plot(dat[dat[,status]==1,varname], dat[dat[,status]==1,survival], xlab=varname, ylab=survival, pch=21, bg='gray',col='black', main=sprintf("Pearson r: %0.3f, non-censored only",cor(dat[dat[,status]==1,varname],dat[dat[,status]==1,survival],method="pearson")))
       print(" ")
     }
   }
@@ -227,7 +228,14 @@ survivorType = cut(as.matrix(dat[survival]), breaks = mybreaks,
 datClass <- dat
 datClass$survivorType <- survivorType
 
-variableSelections <- list(fixed=params$fixed_inputs)
+
+variableSelections <- list()
+
+#use fixed only if length > 1 (avoid bugs)
+if(!is.null(params$fixed_inputs) & length(params$fixed_inputs) > 3){
+  variableSelections$fixed <- params$fixed_inputs
+}
+
 
 #TODO: test for significant short/mid/long differences too.
 
@@ -276,12 +284,19 @@ Filteredinputs <- setdiff(inputs,params$fixed_inputs)
 # Might have a bug with zv and corr...
 
 #apply correlation removal (not to fixed inputs)
-pp <- preProcess(dat[Filteredinputs], method = ppMethods, cutoff=params$cutoff)
 
-print(pp)
+if(length(Filteredinputs)>1){
+  pp <- preProcess(dat[Filteredinputs], method = ppMethods, cutoff=params$cutoff)
 
-#get reduced input set/dataset
-borutaInputs <- union( names(predict(pp, newdata = dat[Filteredinputs])), params$fixed_inputs)
+  print(pp)
+
+  #get reduced input set/dataset
+  borutaInputs <- union( names(predict(pp, newdata = dat[Filteredinputs])), params$fixed_inputs)
+} else {
+  print("Only 1 input, no correlation reduction before boruta")
+  borutaInputs <- union(Filteredinputs,params$fixed_inputs)
+}
+
 
 
 if(params$boruta){
@@ -291,7 +306,7 @@ bor <- Boruta(x=datClass[, borutaInputs ], y=datClass[, "survivorType"], pValue=
 variableSelections$boruta <- union(params$fixed_inputs, names(datClass[,borutaInputs ])[which(bor$finalDecision == "Confirmed")])
 
 #if boruta rejects everything, remove it from selections
-if(sum(bor$finalDecision=="Rejected")==length(borutaInputs) ){
+if(!any(bor$finalDecision=="Confirmed") ) {
   print("Boruta rejected every variable, removing boruta selection from list of variables")
   variableSelections$boruta <- NULL
 }
@@ -400,6 +415,8 @@ corrplot(cor(Filter(is.numeric,dat[variableSelections$aic]), use="pairwise"),
 }
 ```
 ## Categorical Summary: We break the dataset into short vs long survival categories and use the predicted survival class as an additional feature
+
+# Modeling does NOT include censored data
  
 ```{r Classification, echo=FALSE, warning=FALSE, message=FALSE, fig.width=6, fig.height=7}
 
@@ -420,7 +437,7 @@ modelparams <- list(forest = list(method      = "rf",
                                  importance  = FALSE,
                                  predict.all = FALSE
                                  ),
-
+#                    xgboost = list(method = "xgbTree"),
                     #nnet = list(method = "nnet",
                     #             #tuneGrid=data.frame(.size = 10, .decay = 0),
                     #             #linout  = TRUE,
@@ -428,7 +445,8 @@ modelparams <- list(forest = list(method      = "rf",
                     #             MaxNWts = 10000,
                     #             trace   = FALSE,
                     #             maxit   = 100),
-                     svm = list(method = "svmRadial")#,
+                     svm = list(method = "svmRadial"),
+                     gausspr = list(method="gaussprRadial")#,
 # LOGIT (glm) only uses two outputs
 #                     logit = list(method = "glm")
 
@@ -456,7 +474,14 @@ modelsClass   <- list()
 acc <- list()
 
 for(jjj in 1:length(variableSelections)){
-modeldata  <- datClass[,c("survivorType",variableSelections[[jjj]])]
+
+#take uncensored rows
+
+if(! is.null(params$status)){
+  modeldata  <- datClass[datClass[,params$status]==1,c("survivorType",variableSelections[[jjj]])]
+} else {
+  modeldata  <- datClass[,c("survivorType",variableSelections[[jjj]])]
+}
 
 # RE seeding: Hawthorn et al, "The design and analysis of benchmark experiments" (2005)
 
@@ -483,13 +508,23 @@ if(params$leaveOneOut){
 }
 
 # print all model accuracies
+print(sprintf("%d rows used for classification", nrow(modeldata)))
 print("Table of accuracies by model and input variables")
 kable(unlist(acc))
 print(bestClassifier)
 print(caret::confusionMatrix(resultsClass$pred, reference = resultsClass$obs) )
 
 print("Concordance < 0.5 may be due to improper factor level ordering")
-print(survConcordance(survObj~as.numeric(resultsClass$pred)))
+
+#Add predictions on censored data as well
+fullClassPreds <- numeric(nrow(survObj))
+
+fullClassPreds[which(datClass[,status]!= 0)] = bestClassifier$pred$pred
+fullClassPreds[which(datClass[,status]== 0)] = predict(bestClassifier,datClass[datClass[status] != 1,]) #make predictions on censored obs
+
+#WIP make this concordance meaningful
+print("Warning: concordance for class predictions might be erroneous") 
+print(survConcordance(survObj~fullClassPreds))
 
 
 # add predictions to variable selections if hierarchical
@@ -501,7 +536,7 @@ inputs <- c(inputs,"predSurvivorType")
 }
 
 #This line is the one that needs LOOCV
-dat$predSurvivorType <- bestClassifier$pred$pred
+dat$predSurvivorType <- fullClassPreds
 
 ```
 
@@ -567,7 +602,8 @@ modelparams <- list(forest = list(method      = "rf",
                                  importance  = FALSE,
                                  predict.all = FALSE
                                  ),
-                    linear = list(method="lm")
+#                    xgboost = list(method = "xgbTree"),
+                    linear = list(method="lm"),
 #                    nnet = list(method = "nnet",
 #                                 #tuneGrid=data.frame(.size = 10, .decay = 0),
 #                                 #linout  = TRUE,
@@ -578,6 +614,7 @@ modelparams <- list(forest = list(method      = "rf",
 #GLMNET bugged for DF data
 #                     glmnet = list(method="glmnet")#,                     
 #                     svm = list(method = "svmRadial")
+                     gausspr = list(method="gaussprRadial")#,
                      )
 
 modelformula <- as.formula(paste(params$survival,"~."))
@@ -608,8 +645,12 @@ models    <- list()
 acc <- list()
 
 for(jjj in 1:length(variableSelections)){
-modeldata  <- dat[,c(params$survival,variableSelections[[jjj]])]
 
+if(! is.null(params$status) ){
+  modeldata  <- dat[dat[,params$status]==1 , c(params$survival,variableSelections[[jjj]])]
+} else {
+  modeldata  <- dat[, c(params$survival,variableSelections[[jjj]])]
+}
 # RE seeding: Hawthorn et al, "The design and analysis of benchmark experiments" (2005)
 
 for (iii in 1:length(modelparams)){
@@ -626,6 +667,7 @@ acc[[model_name]] <- max(models[[model_name]]$results[metric])
 }
 
 
+print(sprintf("%d rows used for regression modeling", nrow(modeldata)))
 ```
 # Finding the best model for continuous predictions:
 
@@ -673,8 +715,17 @@ if(params$leaveOneOut){
 
 
 ```{r Output model,echo = FALSE}
+
+
+# Add predictions on censored data
+fullPreds <- numeric(nrow(survObj))
+
+fullPreds[which(dat[,status]!= 0)] = bestmod$pred$pred
+fullPreds[which(dat[,status]== 0)] = predict(bestmod,dat[dat[status] != 1,]) #make predictions on censored obs
+
+
 print("C index (Concordance) for best model: 0.5 represents random prediction")
-print(survConcordance(survObj ~ results$pred))
+print(survConcordance(survObj ~ fullPreds))
 
 print("Best model(s) and their inputs (ignore .outcome, it is not used in training)")
 lapply(maxmodels, function(x) {print(x); print(models[[x]]); names(models[[x]]$trainingData)})
@@ -743,7 +794,7 @@ p5
 ```
 
 # Equivalent variables: defined by tight correlation
-correlation cutoff: `params$cutoff`
+correlation cutoff: `r params$cutoff`
 
 
 ```{r Equivalent variables, echo=FALSE}
@@ -764,6 +815,9 @@ for(nam in finalVars){
 print(paste("Variables correlated with: ",nam,sep=""))
 #kable(corVars)
 print(corVars)
+
+corrplot(cormat[cormat[,nam]>params$cutoff,cormat[,nam]>params$cutoff,drop=F])
+
 }
 
 ```
