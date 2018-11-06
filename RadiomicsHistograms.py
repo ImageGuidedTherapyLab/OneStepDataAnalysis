@@ -48,14 +48,33 @@ if not os.path.isfile(args.param):
 
 extractor = featureextractor.RadiomicsFeaturesExtractor(args.param)
 
+
+#set up flags to add to histogram
+newHist  = True
+oldImage = False
+oldMask  = False
+
 for row in inputCsv:
   imageName = row['Image']
   maskName  = row['Mask']
   label     = int(row['Label'])
 
+  #If same image/mask combination, add to histogram
+  if (imageName != oldImage) | (maskName != oldMask):
+    newHist = True
+    print("Saving new histogram")
+
+  oldImage = imageName
+  oldMask  = maskName
+
   # compute feature maps
-  print("Extracting features for:\n" + imageName + "\n" + maskName + "\n" +  "label =" + str(label))
+  print("Extracting features for:\n" + imageName + "\n" + maskName + "\n" +  "label = " + str(label))
   result = extractor.execute(imageName, maskName, label, voxelBased=True)
+
+  #HACK if more than 1 feature disable plotting on sasme axes since key,val loop over features first
+  if len(result.keys()) != 1:
+    print("Multiple features being output, disabling overlaid histograms")
+    newHist = True
 
   # extract images
   for key, val in six.iteritems(result):
@@ -69,13 +88,17 @@ for row in inputCsv:
     voxelMean = voxelArray.mean()
     print("Mean: " + str(voxelMean))
 
-    #Print histogram
-    plt.figure()
-    n, bins, patched = plt.hist(voxelArray,25,facecolor='gray',alpha=0.75)
+    #Print histogram, if different image/mask combo then start new figure
+    if newHist:    
+      plt.figure()
+      newHist = False
+  
+    n, bins, patched = plt.hist(voxelArray,25,density=True, alpha=0.75, label = str(label))
     plt.xlabel(key)
-    plt.ylabel('frequency')
+    plt.ylabel('density')
     plt.title(imageName +"\n"+ maskName +"\n"+str(label))
     plt.grid(True)
+    plt.legend()
     plt.savefig(outname.replace('.nii.gz','.png'), bbox_inches='tight')
 
     if args.writeImage:
