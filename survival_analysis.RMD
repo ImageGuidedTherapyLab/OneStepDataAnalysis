@@ -182,7 +182,7 @@ if(params$plot){
       maxrow <- which(dat[,varname] == max(dat[,varname]))
       hist(dat[dat[,status]==1,varname], col="gray", main = paste("Max in row:", maxrow), xlab=varname)
       plot(dat[dat[,status]==1,varname], dat[dat[,status]==1,survival], xlab=varname, ylab=survival, pch=21, bg='gray',col='black', main=sprintf("Pearson r: %0.3f, non-censored only",cor(dat[dat[,status]==1,varname],dat[dat[,status]==1,survival],method="pearson")))
-      print(" ")
+      print(summary(dat[,varname]))
     }
   }
 }
