@@ -52,7 +52,7 @@ Print params to stdout: `r print(params)`
 
 ```{r libs, echo=FALSE}
 
-libs <- c("corrplot", "survival", "ggplot2", "caret", "knitr", "MASS", "Boruta", "gridExtra", "randomForest","reshape2","glmnet")
+libs <- c("corrplot", "survival", "ggplot2", "caret", "knitr", "MASS", "Boruta", "gridExtra", "randomForest","reshape2","glmnet", "pROC")
 
 invisible(lapply(libs, require,character.only=T))
 
@@ -182,7 +182,7 @@ if(params$plot){
       maxrow <- which(dat[,varname] == max(dat[,varname]))
       hist(dat[dat[,status]==1,varname], col="gray", main = paste("Max in row:", maxrow), xlab=varname)
       plot(dat[dat[,status]==1,varname], dat[dat[,status]==1,survival], xlab=varname, ylab=survival, pch=21, bg='gray',col='black', main=sprintf("Pearson r: %0.3f, non-censored only",cor(dat[dat[,status]==1,varname],dat[dat[,status]==1,survival],method="pearson")))
-      print(" ")
+      print(summary(dat[,varname]))
     }
   }
 }
@@ -346,7 +346,7 @@ pvalThresh <- 0.15
 print(sprintf("p-value threshold for linear correlation, %f",pvalThresh))
 variableSelections$univariate <- union(nums[pvals < pvalThresh], params$fixed_inputs) #discard variables above threshold
 
-if(length(variableSelections$univariate)>1){
+if(length(variableSelections$univariate) >1 ){
 corrplot(cor(Filter(is.numeric,dat[variableSelections$univariate]), use="pairwise"),
    title = "Correlations for Linear Univariate method",
    mar = c(1,2,2,0),
@@ -375,7 +375,7 @@ variableSelections$multivariate <- union(params$fixed_inputs, names(multiPvals)[
 #TODO: correct for multiple comparisons
 
 
-if(length(variableSelections$multivariate)>1){
+if(length(variableSelections$multivariate) >1 ){
 corrplot(cor(Filter(is.numeric,dat[variableSelections$multivariate]), use="pairwise"),
    title = "Correlations for Multivariate Cox  method",
    mar = c(1,2,2,0),
@@ -407,7 +407,7 @@ print(coxStep$coefficients)
 variableSelections$aic <- union(params$fixed_inputs, names(coxStep$coefficients))
 
 
-if(length(variableSelections$aic) > 1 ){
+if(length(variableSelections$aic) >1 ){
 corrplot(cor(Filter(is.numeric,dat[variableSelections$aic]), use="pairwise"),
    title = "Correlations for stepwise AIC method",
    mar = c(1,2,2,0),
@@ -517,7 +517,7 @@ print(caret::confusionMatrix(resultsClass$pred, reference = resultsClass$obs) )
 print("Concordance < 0.5 may be due to improper factor level ordering")
 
 #Add predictions on censored data as well
-fullClassPreds <- numeric(nrow(survObj))
+fullClassPreds <- factor(levels = levels(datFull$survivalClass))
 
 fullClassPreds[which(datClass[,status]!= 0)] = bestClassifier$pred$pred
 fullClassPreds[which(datClass[,status]== 0)] = predict(bestClassifier,datClass[datClass[status] != 1,]) #make predictions on censored obs
@@ -540,6 +540,31 @@ dat$predSurvivorType <- fullClassPreds
 
 ```
 
+# ROC analysis if survival classes are just short/long
+
+```{r ROC analysis if only 2 classes, echo=FALSE}
+#WIP
+#check if binary short/long survival
+if(length(timelabs) == 2){
+
+probLong <- numeric()
+
+#get probabilistic prediction
+probLong[which(datClass[,status] == 1)] = predict(bestClassifier,datClass[datClass[status] == 1,], type="prob")[[ timelabs[2] ]] #make predictions on known obs
+
+if( any(datClass$status != 1) ){
+probLong[which(datClass[,status] != 1)] = predict(bestClassifier,datClass[datClass[status] != 1,], type="prob")[[ timelabs[2] ]] #make predictions on censored obs
+}
+
+ROC1 <- roc(response = datClass$survivorType,
+                       levels = timelabs,
+                       predictor = probLong)###
+
+print(ROC1)
+plot(ROC1)
+}
+
+```
 # CURRENTLY DISABLED:
 # Next: build a cox model to predict survival (leave-one-out) and train only on the cases from the same predicted short/long survival category. We also train a linear model in the same way for comparison.
 
