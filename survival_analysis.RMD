@@ -180,8 +180,9 @@ if(params$plot){
     if(!is.factor(dat[,varname])){
 
       maxrow <- which(dat[,varname] == max(dat[,varname]))
-      hist(dat[dat[,status]==1,varname], col="gray", main = paste("Max in row:", maxrow), xlab=varname)
-      plot(dat[dat[,status]==1,varname], dat[dat[,status]==1,survival], xlab=varname, ylab=survival, pch=21, bg='gray',col='black', main=sprintf("Pearson r: %0.3f, non-censored only",cor(dat[dat[,status]==1,varname],dat[dat[,status]==1,survival],method="pearson")))
+      hist(dat[,varname], col="gray", main = paste("Max in row:", maxrow), xlab=varname)
+#      plot(dat[dat[,status]==1,varname], dat[dat[,status]==1,survival], xlab=varname, ylab=survival, pch=21, bg='gray',col='black', main=sprintf("Pearson r: %0.3f, non-censored only",cor(dat[dat[,status]==1,varname],dat[dat[,status]==1,survival],method="pearson")))
+      plot(dat[,varname], dat[,survival], xlab=varname, ylab=survival, pch=21, bg=dat[,status],col="black", main=sprintf("Pearson r: %0.3f, unfilled=censored",cor(dat[,varname],dat[,survival],method="pearson")))
       print(summary(dat[,varname]))
     }
   }
@@ -254,7 +255,7 @@ univResults <- lapply(coxUniModels, function(x) {return(exp(cbind(coef(x),confin
 univPvals <- lapply(coxUniModels, function(x) {summary(x)$waldtest["pvalue"]})
 
 #TODO: change p value threshold
-variableSelections$coxunivariate <- union(params$fixed_inputs, setdiff(inputs, inputs[univPvals > 0.05]) )#discard variables above threshold
+variableSelections$coxunivariate <- union(params$fixed_inputs, inputs[which(univPvals < 0.05)]) #discard variables above threshold (also handles NAs)
 
 print("Univariate significant variables via Cox model:")
 print(variableSelections$coxunivariate)
@@ -278,10 +279,12 @@ print("Pre-processing to remove correlated variables before Boruta method")
 #pre-process with correlations
 ppMethods <- "zv"
 if(params$rescale)          {ppMethods <- c(ppMethods,"center","scale")}
-if(params$removeCorrelated) {ppMethods <- c(ppMethods, "corr")}
+
+# BUG: "zv" and "corr" do not work together for some inputs...
+#if(params$removeCorrelated) {ppMethods <- c(ppMethods, "corr")}
 
 Filteredinputs <- setdiff(inputs,params$fixed_inputs)
-# Might have a bug with zv and corr...
+
 
 #apply correlation removal (not to fixed inputs)
 
@@ -344,7 +347,7 @@ names(pvals) <- nums
 #TODO: adjust p-value threshold with parameter
 pvalThresh <- 0.15
 print(sprintf("p-value threshold for linear correlation, %f",pvalThresh))
-variableSelections$univariate <- union(nums[pvals < pvalThresh], params$fixed_inputs) #discard variables above threshold
+variableSelections$univariate <- union(nums[which(pvals < pvalThresh)], params$fixed_inputs) #discard variables above threshold
 
 if(length(variableSelections$univariate) >1 ){
 corrplot(cor(Filter(is.numeric,dat[variableSelections$univariate]), use="pairwise"),
@@ -416,7 +419,7 @@ corrplot(cor(Filter(is.numeric,dat[variableSelections$aic]), use="pairwise"),
 ```
 ## Categorical Summary: We break the dataset into short vs long survival categories and use the predicted survival class as an additional feature
 
-# Modeling does NOT include censored data
+# Modeling does NOT include censored data unless the censored observation is a "long" survival time
  
 ```{r Classification, echo=FALSE, warning=FALSE, message=FALSE, fig.width=6, fig.height=7}
 
@@ -475,10 +478,10 @@ acc <- list()
 
 for(jjj in 1:length(variableSelections)){
 
-#take uncensored rows
+#take uncensored rows (leave censored rows if survivor type is "long")
 
 if(! is.null(params$status)){
-  modeldata  <- datClass[datClass[,params$status]==1,c("survivorType",variableSelections[[jjj]])]
+  modeldata  <- datClass[ (datClass[,params$status]==1 | datClass$survivorType == timelabs[length(timelabs)] ), c("survivorType",variableSelections[[jjj]])]
 } else {
   modeldata  <- datClass[,c("survivorType",variableSelections[[jjj]])]
 }
@@ -672,7 +675,7 @@ acc <- list()
 for(jjj in 1:length(variableSelections)){
 
 if(! is.null(params$status) ){
-  modeldata  <- dat[dat[,params$status]==1 , c(params$survival,variableSelections[[jjj]])]
+  modeldata  <- dat[dat[,params$status]==1 | datClass$survivorType == timelabs[length(timelabs)] , c(params$survival,variableSelections[[jjj]])]
 } else {
   modeldata  <- dat[, c(params$survival,variableSelections[[jjj]])]
 }
