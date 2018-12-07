@@ -23,6 +23,7 @@ params:
 
 ---
 ## General Survival Prediction
+
 Input parameter descriptions:
 
 outCsvname is the file name/path for thesamed csv with validation predictions. If null, uses the input csv name as a base
@@ -43,6 +44,7 @@ nfold breaks the data into n evenly distrubuted folds. Used with foldID to holdo
 
 foldID (ex. 4) is used as the hold out set and the full script is run on just the remaining data (ex. fold 1,2,3 and 5 if nfold=5). Default NULL uses all folds as training.
 
+The status parameter encodes censoring of survival data, this code is expecting 0=censored, 1 = event.
 
 # Compiled: `r format(Sys.time(), "%Y-%b-%d %H:%M:%S")` 
 
@@ -289,7 +291,7 @@ Filteredinputs <- setdiff(inputs,params$fixed_inputs)
 #apply correlation removal (not to fixed inputs)
 
 if(length(Filteredinputs)>1){
-  pp <- preProcess(dat[Filteredinputs], method = ppMethods, cutoff=params$cutoff)
+  pp <- preProcess(dat[dat[,status]==1 | datClass$survivorType == timelabs[length(timelabs)],Filteredinputs], method = ppMethods, cutoff=params$cutoff)
 
   print(pp)
 
@@ -305,7 +307,7 @@ if(length(Filteredinputs)>1){
 if(params$boruta){
 
 #TODO: document boruta "Confirmed" vs "Tentative"
-bor <- Boruta(x=datClass[, borutaInputs ], y=datClass[, "survivorType"], pValue=.35)
+bor <- Boruta(x=datClass[dat[,status]==1 | datClass$survivorType == timelabs[length(timelabs)], borutaInputs ], y=datClass[dat[,status]==1 | datClass$survivorType == timelabs[length(timelabs)], "survivorType"], pValue=.35)
 variableSelections$boruta <- union(params$fixed_inputs, names(datClass[,borutaInputs ])[which(bor$finalDecision == "Confirmed")])
 
 #if boruta rejects everything, remove it from selections
@@ -321,7 +323,7 @@ print(bor)
 
 if(length(variableSelections$boruta) > 1 & params$plot){
 
-correlations <- cor(Filter(is.numeric,dat[variableSelections$boruta]), use="pairwise")
+correlations <- cor(Filter(is.numeric,dat[dat[,status]==1 | datClass$survivorType == timelabs[length(timelabs)],variableSelections$boruta]), use="pairwise")
    corrplot(correlations,
    title = "Correlations for Boruta method",
    mar = c(1,2,2,0),
@@ -339,7 +341,7 @@ nums <- sapply(dat[inputs],is.numeric)
 nums <- names(nums)[nums] #get names not T/F
 pvals <- lapply(nums,
        function(var) {          
-           test <- cor.test(dat[, c(var)], dat[, survival])
+           test <- cor.test(dat[dat[,status]==1 | datClass$survivorType == timelabs[length(timelabs)], c(var)], dat[dat[,status]==1 | datClass$survivorType == timelabs[length(timelabs)], survival])
            test$p.value #could use 1-pchisq(test$statistic, df= test$parameter)
        })
 names(pvals) <- nums
@@ -350,7 +352,7 @@ print(sprintf("p-value threshold for linear correlation, %f",pvalThresh))
 variableSelections$univariate <- union(nums[which(pvals < pvalThresh)], params$fixed_inputs) #discard variables above threshold
 
 if(length(variableSelections$univariate) >1 ){
-corrplot(cor(Filter(is.numeric,dat[variableSelections$univariate]), use="pairwise"),
+corrplot(cor(Filter(is.numeric,dat[dat[,status]==1 | datClass$survivorType == timelabs[length(timelabs)],variableSelections$univariate]), use="pairwise"),
    title = "Correlations for Linear Univariate method",
    mar = c(1,2,2,0),
    order = "hclust" )
