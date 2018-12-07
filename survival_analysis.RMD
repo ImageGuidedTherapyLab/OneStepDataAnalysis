@@ -481,7 +481,7 @@ for(jjj in 1:length(variableSelections)){
 #take uncensored rows (leave censored rows if survivor type is "long")
 
 if(! is.null(params$status)){
-  modeldata  <- datClass[ (datClass[,params$status]==1 | datClass$survivorType == timelabs[length(timelabs)] ), c("survivorType",variableSelections[[jjj]])]
+  modeldata  <- datClass[ (datClass[,status]==1 | datClass$survivorType == timelabs[length(timelabs)] ), c("survivorType",variableSelections[[jjj]])]
 } else {
   modeldata  <- datClass[,c("survivorType",variableSelections[[jjj]])]
 }
@@ -616,6 +616,8 @@ print(cor(coxPreds,dat[[survival]])^2)
 
 # Now, predict survival using all model/variable combinations. Default is leave-one-out cross validation and the predicted survivor type (short/mid/long) is used as an input feature for every model.
 
+# Continuous predictions only use non-censored observations. The final model is applied to all non-censored observations
+
 ```{r Modeling (may take some time), echo=FALSE, warning=FALSE, message=FALSE}
 
 #Modeling, dataparams are arguements to caret::train
@@ -650,7 +652,7 @@ modelformula <- as.formula(paste(params$survival,"~."))
 #TODO: option to select RMSE vs Rsquared
 dataparams   <- list(form = modelformula,
 #                      data = dat[,c(params$target,Filteredinputs)],
-                      metric="Rsquared", #other option: AUC?
+                      metric="Rsquared",
                       trControl=trainControl(allowParallel  = T,
                                              method = ifelse(params$leaveOneOut,"LOOCV", "repeatedcv"),
                                              classProbs=FALSE,
@@ -675,7 +677,7 @@ acc <- list()
 for(jjj in 1:length(variableSelections)){
 
 if(! is.null(params$status) ){
-  modeldata  <- dat[dat[,params$status]==1 | datClass$survivorType == timelabs[length(timelabs)] , c(params$survival,variableSelections[[jjj]])]
+  modeldata  <- dat[dat[,params$status]==1 , c(params$survival,variableSelections[[jjj]])]
 } else {
   modeldata  <- dat[, c(params$survival,variableSelections[[jjj]])]
 }
@@ -713,8 +715,7 @@ if(params$leaveOneOut){
     ylab=paste("training set LOOCV",metric))
  
   #pred vs obs
-  plot(x=results$pred,y=results$obs, xlab="Predicted survival", ylab="Actual survival",
-       xlim=c(0,max(dat[[survival]])), ylim=c(0,max(dat[[survival]]))
+  plot(x=results$obs,y=results$pred, ylab="Predicted survival", xlab="Actual survival", main="non-censored only", xlim=c(0,max(dat[[survival]])), ylim=c(0,max(dat[[survival]]))
       )
    
 } else {
@@ -748,9 +749,9 @@ if(params$leaveOneOut){
 # Add predictions on censored data
 fullPreds <- numeric(nrow(survObj))
 
-fullPreds[which(dat[,status]!= 0)] = bestmod$pred$pred
-fullPreds[which(dat[,status]== 0)] = predict(bestmod,dat[dat[status] != 1,]) #make predictions on censored obs
-
+fullPreds[dat[,status] ==1 ]  = bestmod$pred$pred #LOOCV on non-censored
+fullPreds[dat[,status] !=1] = predict(bestmod,dat[dat[status] != 1,]) #make predictions on censored obs
+#dat[,params$status]==1 | 
 
 print("C index (Concordance) for best model: 0.5 represents random prediction")
 print(survConcordance(survObj ~ fullPreds))
@@ -758,23 +759,32 @@ print(survConcordance(survObj ~ fullPreds))
 print("Best model(s) and their inputs (ignore .outcome, it is not used in training)")
 lapply(maxmodels, function(x) {print(x); print(models[[x]]); names(models[[x]]$trainingData)})
 
-results <- bestmod$pred
+#TODO use fullPreds instead of results
+results <- data.frame(status = factor(dat[,status]),
+                      pred = fullPreds,
+                      obs = dat[,survival],
+                      training_pred = predict(bestmod,newdata=dat),
+                      training_err = predict(bestmod,newdata=dat) - dat[,survival],
+                      testing_err = fullPreds - dat[,survival]
+)
 
 #predict function uses final model by default
 #compare training, testing errors
-results$training_pred <- predict(bestmod,newdata=bestmod$trainingData[results$rowIndex,])
-results$training_err <- results$training_pred - results$obs
-results$testing_err <- results$pred - results$obs
+#results$training_pred <- predict(bestmod,newdata=bestmod$trainingData[results$rowIndex,])
+#results$training_err <- results$training_pred - results$obs
+#results$testing_err <- results$pred - results$obs
 
 p1 <- ggplot(data=results) +
-geom_point(aes(x=obs,y=pred)) +
+geom_point(aes(x=obs,y=pred, col=status)) +
+scale_color_manual(values=c("red","black")) +
 ylab("Predicted (test set)") +
 xlab("Observed") +
 theme_light(base_size=12)
 
 p2 <- ggplot(data=results) +
-geom_point(aes(x=obs,y=training_pred)) +
+geom_point(aes(x=obs,y=training_pred, col=status)) +
 ylab("Predicted (training set)") +
+scale_color_manual(values=c("red","black")) +
 xlab("Observed") +
 theme_light(base_size=12)
 
@@ -918,7 +928,7 @@ if(!is.null(params$foldID)){
 } else { #if no validation fold, write all predictions
   trainingpredname <- "LOOCVPreds"
   datFull[trainingpredname] <- NA
-  datFull[rownames(dat)[results$rowIndex],trainingpredname] <- results$pred  #trickey line of code since results$rowIndex referes to rows of dat not datFull
+  datFull[rownames(dat),trainingpredname] <- results$pred  #trickey line of code since results$rowIndex referes to rows of dat not datFull
 }
 
 
@@ -942,9 +952,9 @@ datFull[which(datFull$validationFolds == params$foldID), predname] <- validation
 print("summary of predictions:")
 
 if(!is.null(params$foldID)){
-  kable(datFull[,c(survival,predname,trainingpredname)])
+  kable(datFull[,c(survival,status,predname,trainingpredname)])
 } else {
-  kable(datFull[,c(survival,trainingpredname)])
+  kable(datFull[,c(survival,status,trainingpredname)])
 }
 
 
