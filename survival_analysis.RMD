@@ -23,6 +23,7 @@ params:
 
 ---
 ## General Survival Prediction
+
 Input parameter descriptions:
 
 outCsvname is the file name/path for thesamed csv with validation predictions. If null, uses the input csv name as a base
@@ -43,6 +44,7 @@ nfold breaks the data into n evenly distrubuted folds. Used with foldID to holdo
 
 foldID (ex. 4) is used as the hold out set and the full script is run on just the remaining data (ex. fold 1,2,3 and 5 if nfold=5). Default NULL uses all folds as training.
 
+The status parameter encodes censoring of survival data, this code is expecting 0=censored, 1 = event.
 
 # Compiled: `r format(Sys.time(), "%Y-%b-%d %H:%M:%S")` 
 
