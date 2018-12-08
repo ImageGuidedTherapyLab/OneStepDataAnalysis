@@ -341,7 +341,7 @@ nums <- sapply(dat[inputs],is.numeric)
 nums <- names(nums)[nums] #get names not T/F
 pvals <- lapply(nums,
        function(var) {          
-           test <- cor.test(dat[dat[,status]==1 | datClass$survivorType == timelabs[length(timelabs)], c(var)], dat[dat[,status]==1 | datClass$survivorType == timelabs[length(timelabs)], survival])
+           test <- cor.test(dat[dat[,status]==1, c(var)], dat[dat[,status]==1, survival])
            test$p.value #could use 1-pchisq(test$statistic, df= test$parameter)
        })
 names(pvals) <- nums
@@ -352,7 +352,7 @@ print(sprintf("p-value threshold for linear correlation, %f",pvalThresh))
 variableSelections$univariate <- union(nums[which(pvals < pvalThresh)], params$fixed_inputs) #discard variables above threshold
 
 if(length(variableSelections$univariate) >1 ){
-corrplot(cor(Filter(is.numeric,dat[dat[,status]==1 | datClass$survivorType == timelabs[length(timelabs)],variableSelections$univariate]), use="pairwise"),
+corrplot(cor(Filter(is.numeric,dat[dat[,status]==1,variableSelections$univariate]), use="pairwise"),
    title = "Correlations for Linear Univariate method",
    mar = c(1,2,2,0),
    order = "hclust" )
