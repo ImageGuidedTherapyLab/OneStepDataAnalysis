@@ -679,7 +679,7 @@ acc <- list()
 for(jjj in 1:length(variableSelections)){
 
 if(! is.null(params$status) ){
-  modeldata  <- dat[dat[,params$status]==1 , c(params$survival,variableSelections[[jjj]])]
+  modeldata  <- dat[dat[,params$status]==1| datClass$survivorType == timelabs[length(timelabs)] , c(params$survival,variableSelections[[jjj]])]
 } else {
   modeldata  <- dat[, c(params$survival,variableSelections[[jjj]])]
 }
@@ -957,6 +957,10 @@ if(!is.null(params$foldID)){
   kable(datFull[,c(survival,status,predname,trainingpredname)])
 } else {
   kable(datFull[,c(survival,status,trainingpredname)])
+
+  print(roc(datFull[,survival] < 100, datFull[,trainingpredname] ))
+  plot(roc(datFull[,survival] < 100, datFull[,trainingpredname] ))
+
 }
 
 
