@@ -46,6 +46,14 @@ foldID (ex. 4) is used as the hold out set and the full script is run on just th
 
 The status parameter encodes censoring of survival data, this code is expecting 0=censored, 1 = event.
 
+Generally, do not trust censored data with short outcome times. This situation could ultimately have either long or short response time and is thus not included in the training data.
+
+https://towardsdatascience.com/what-metrics-should-we-use-on-imbalanced-data-set-precision-recall-roc-e2e79252aeba
+
+https://www.kaggle.com/lct14558/imbalanced-data-why-you-should-not-use-roc-curve
+
+https://acutecaretesting.org/en/articles/precision-recall-curves-what-are-they-and-how-are-they-used
+
 # Compiled: `r format(Sys.time(), "%Y-%b-%d %H:%M:%S")` 
 
 
@@ -141,6 +149,7 @@ if(!is.null(params$foldID)){
   dat <- dat[-validationidx,]
 }
 
+# @egates1 - can you overlap two histograms that separate the censored data?
 histinfo<-hist(dat[,survival], 
      main="Histogram of outcome", 
      xlab="outcome", 
@@ -548,7 +557,7 @@ dat$predSurvivorType <- fullClassPreds
 # ROC analysis if survival classes are just short/long
 
 ```{r ROC analysis if only 2 classes, echo=FALSE}
-#WIP
+#WIP - @egates1 - for multi-class, need 1 ROC for each class, 0 = the class prediction, 1 = everything else
 #check if binary short/long survival
 if(length(timelabs) == 2){
 
@@ -752,7 +761,10 @@ if(params$leaveOneOut){
 fullPreds <- numeric(nrow(survObj))
 
 fullPreds[dat[,status] ==1 ]  = bestmod$pred$pred #LOOCV on non-censored
-fullPreds[dat[,status] !=1] = predict(bestmod,dat[dat[status] != 1,]) #make predictions on censored obs
+#make predictions on censored non-responders
+fullPreds[dat[,status] !=1] = predict(bestmod,dat[dat[status] != 1 & datClass$survivorType != timelabs[length(timelabs)],])
+
+
 #dat[,params$status]==1 | 
 
 print("C index (Concordance) for best model: 0.5 represents random prediction")
