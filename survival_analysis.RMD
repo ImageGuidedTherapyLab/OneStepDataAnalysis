@@ -635,6 +635,7 @@ print(cor(coxPreds,dat[[survival]])^2)
 # CONTINUOUS PREDICTION
 #TODO: distinguish this from the categorical prediction
 
+#@egates1 - need to weight data for class imbalance. weight training data by survival time ? 
 modelparams <- list(forest = list(method      = "rf",
                                   ntree       = 500,
                                  #tuneGrid    = data.frame(.mtry = mtry),
@@ -972,6 +973,8 @@ if(!is.null(params$foldID)){
 
   print(roc(datFull[,survival] < 100, datFull[,trainingpredname] ))
   plot(roc(datFull[,survival] < 100, datFull[,trainingpredname] ))
+# @egates1 need precision recall curves
+# https://towardsdatascience.com/what-metrics-should-we-use-on-imbalanced-data-set-precision-recall-roc-e2e79252aeba
 
 }
 
