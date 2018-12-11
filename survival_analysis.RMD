@@ -7,8 +7,9 @@ params:
   survival:         survival
   status:           !r NULL 
   regexp:           !r "firstorder"
-  fixed_inputs:     !r   NULL
-  exclude_inputs:   !r   NULL  
+  fixed_inputs:     !r NULL
+  exclude_inputs:   !r NULL  
+  weights:          !r NULL
   hierarch:         !r FALSE
   nfold:            !r NULL
   leaveOneOut:      !r TRUE 
@@ -31,6 +32,8 @@ outCsvname is the file name/path for thesamed csv with validation predictions. I
 regexp parameter is a regular expression to get input features
 
 fixed_inputs is a regular expression that provides clinical inputs (age, kps, etc.) to bypass variable selection and are used in every survival model.
+
+weights should be the name of a single column with numeric weights to use in model training.
 
 exclude_inputs (regexp) are features known to be outliers and are excluded from inputs that match regexp:
 
@@ -62,7 +65,7 @@ Print params to stdout: `r print(params)`
 
 ```{r libs, echo=FALSE}
 
-libs <- c("corrplot", "survival", "ggplot2", "caret", "knitr", "MASS", "Boruta", "gridExtra", "randomForest","reshape2","glmnet", "pROC")
+libs <- c("corrplot", "survival", "ggplot2", "caret", "knitr", "MASS", "Boruta", "gridExtra", "randomForest","reshape2","glmnet", "pROC", "PRROC")
 
 invisible(lapply(libs, require,character.only=T))
 
@@ -85,6 +88,17 @@ status   <- params$status
 inputs <- union(params$fixed_inputs,
                 grep(params$regexp, names(datFull),value=T))
 
+#get weights for training data
+if(!is.null(params$weights) ){
+  trainingWeights <- params$weights
+
+  if(!trainingWeights %in% names(datFull) || !is.numeric(datFull[,trainingWeights])){
+    stop("weight parameter is not the name of a numeric column")
+  }
+} else {
+  trainingWeights <- NULL
+}
+
 
 print(sprintf("%d rows and %d columns read from csv file: %s", nrow(datFull), ncol(datFull), params$csvPath))
 print(sprintf("%d inputs found with regexp parameter and fixed inputs", length(inputs)))
@@ -99,10 +113,8 @@ if (!is.null(params$exclude_inputs)){
 }
 
 
-
-
 # remove unnecessary columns and clean NAs
-datCrop <- datFull[,c(inputs,survival,status)]
+datCrop <- datFull[,c(inputs,survival,status,trainingWeights)]
 
 
 
@@ -150,14 +162,37 @@ if(!is.null(params$foldID)){
 }
 
 # @egates1 - can you overlap two histograms that separate the censored data?
+#  overlapping histograms are hard to read/interpret
 histinfo<-hist(dat[,survival], 
-     main="Histogram of outcome", 
-     xlab="outcome", 
+     main="Histogram of outcome for all observations",
+     xlab=survival, 
      border="blue", 
      col="green",
 #     xlim=c(0,100),
      las=1, 
      breaks=50)
+
+hist(dat[dat[,status] == 1,survival], 
+     main="Histogram of NON-censored observations", 
+     xlab=survival, 
+     border="black", 
+     col="blue",
+#     xlim=c(0,100),
+     las=1, 
+     breaks=50,
+     add = F)
+
+
+hist(dat[dat[,status] != 1,survival], 
+     main="Histogram censored observations", 
+     xlab=survival, 
+     border="black", 
+     col="red",
+#     xlim=c(0,100),
+     las=1, 
+     breaks=50,
+     add = F)
+
 
 print(summary(dat[,survival]))
 quantile(dat[,survival], .30)
@@ -471,6 +506,7 @@ modelformula <- as.formula("survivorType~.")
 dataparams   <- list(form = modelformula,
 #                      data = dat[,c(params$target,Filteredinputs)],
                       metric="Accuracy",
+#                      weights = trainingWeights,
                       trControl=trainControl(allowParallel  = T,
                                              method = ifelse(params$leaveOneOut,"LOOCV", "repeatedcv"),
                                              classProbs=TRUE,
@@ -493,8 +529,10 @@ for(jjj in 1:length(variableSelections)){
 
 if(! is.null(params$status)){
   modeldata  <- datClass[ (datClass[,status]==1 | datClass$survivorType == timelabs[length(timelabs)] ), c("survivorType",variableSelections[[jjj]])]
+  weightList <- datClass[  (datClass[,status]==1 | datClass$survivorType == timelabs[length(timelabs)] ), trainingWeights]
 } else {
   modeldata  <- datClass[,c("survivorType",variableSelections[[jjj]])]
+  weightList <- datClass[  (datClass[,status]==1 | datClass$survivorType == timelabs[length(timelabs)] ), trainingWeights]
 }
 
 # RE seeding: Hawthorn et al, "The design and analysis of benchmark experiments" (2005)
@@ -503,7 +541,7 @@ for (iii in 1:length(modelparams)){
 model_name <-paste("Class", names(variableSelections)[jjj], names(modelparams)[iii],sep="_")
 print(model_name)
 set.seed(3141) #seed before train to get same subsamples
-invisible(  modelsClass[[model_name]] <- do.call(caret::train, c(caretparams[[iii]], list(data=modeldata)))  )
+invisible(  modelsClass[[model_name]] <- do.call(caret::train, c(caretparams[[iii]], list(data=modeldata, weights=weightList)))  )
 metric <- modelsClass[[model_name]]$metric
 
 #get best acuracy manually for LOOCV
@@ -665,6 +703,7 @@ modelformula <- as.formula(paste(params$survival,"~."))
 dataparams   <- list(form = modelformula,
 #                      data = dat[,c(params$target,Filteredinputs)],
                       metric="Rsquared",
+#                      weights = trainingWeights,
                       trControl=trainControl(allowParallel  = T,
                                              method = ifelse(params$leaveOneOut,"LOOCV", "repeatedcv"),
                                              classProbs=FALSE,
@@ -689,9 +728,11 @@ acc <- list()
 for(jjj in 1:length(variableSelections)){
 
 if(! is.null(params$status) ){
-  modeldata  <- dat[dat[,params$status]==1| datClass$survivorType == timelabs[length(timelabs)] , c(params$survival,variableSelections[[jjj]])]
+  modeldata  <- dat[   dat[,status]==1 | datClass$survivorType == timelabs[length(timelabs)]  , c(survival,variableSelections[[jjj]])]
+  weightList <- dat[  (dat[,status]==1 | datClass$survivorType == timelabs[length(timelabs)] ), trainingWeights]
 } else {
-  modeldata  <- dat[, c(params$survival,variableSelections[[jjj]])]
+  modeldata  <- dat[   dat[,status]==1 | datClass$survivorType == timelabs[length(timelabs)]  , c(survival,variableSelections[[jjj]])]
+  weightList <- dat[  (dat[,status]==1 | datClass$survivorType == timelabs[length(timelabs)] ), trainingWeights]
 }
 # RE seeding: Hawthorn et al, "The design and analysis of benchmark experiments" (2005)
 
@@ -699,7 +740,7 @@ for (iii in 1:length(modelparams)){
 model_name <-paste(names(variableSelections)[jjj], names(modelparams)[iii],sep="_")
 print(model_name)
 set.seed(3141) #seed before train to get same subsamples
-invisible(  models[[model_name]] <- do.call(caret::train, c(caretparams[[iii]], list(data=modeldata)))  )
+invisible(  models[[model_name]] <- do.call(caret::train, c(caretparams[[iii]], list(data=modeldata, weights=weightList)))  )
 metric <- models[[model_name]]$metric
 
 #get best acuracy manually for LOOCV
@@ -775,6 +816,7 @@ print("Best model(s) and their inputs (ignore .outcome, it is not used in traini
 lapply(maxmodels, function(x) {print(x); print(models[[x]]); names(models[[x]]$trainingData)})
 
 #TODO use fullPreds instead of results
+#results is defined more than once
 results <- data.frame(status = factor(dat[,status]),
                       pred = fullPreds,
                       obs = dat[,survival],
@@ -941,9 +983,9 @@ if(!is.null(params$foldID)){
     }
 
 } else { #if no validation fold, write all predictions
-  trainingpredname <- "LOOCVPreds"
-  datFull[trainingpredname] <- NA
-  datFull[rownames(dat),trainingpredname] <- results$pred  #trickey line of code since results$rowIndex referes to rows of dat not datFull
+  trainingpredname <- "fullPreds"
+  datFull[,trainingpredname] <- NA
+  datFull[rownames(dat),trainingpredname] <- fullPreds  #trickey line of code since results$rowIndex referes to rows of dat not datFull
 }
 
 
@@ -975,6 +1017,13 @@ if(!is.null(params$foldID)){
   plot(roc(datFull[,survival] < 100, datFull[,trainingpredname] ))
 # @egates1 need precision recall curves
 # https://towardsdatascience.com/what-metrics-should-we-use-on-imbalanced-data-set-precision-recall-roc-e2e79252aeba
+#  Using packace "PPROC"
+
+#May give "NA" if NAs are present, currently hacked to remove NA predictions
+PR1 <- pr.curve(weights.class0=as.numeric(datFull[!is.na(datFull[,trainingpredname]),survival] < 100), scores.class0=na.omit(datFull[,trainingpredname]), curve=T)
+
+PR1
+plot(PR1)
 
 }
 
