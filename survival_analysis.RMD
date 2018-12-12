@@ -133,6 +133,27 @@ if(nrow(datCompleteCases) < 5){
 dat <- datCompleteCases[, (colSums(is.na(datCompleteCases)) == 0 ) & (sapply(datCompleteCases, function(x) sum(is.infinite(x)) ) == 0) ]
 
 
+# Add categorical responders/non responders
+if(!is.null(params$breaks)){
+  mybreaks = params$breaks
+} else {
+  print("No time breaks given, cutting survival times into two equal groups")
+  mybreaks = c(-Inf,median(dat[,survival]),Inf)
+}
+
+if( any(mybreaks %in% dat[,survival]) ){warning("One survival time is exactly coincident with a break value, this will create a NA")}
+
+if(length(mybreaks ) ==3) {
+ timelabs <- c("short","long")
+} else if(length(mybreaks) ==4){
+ timelabs <-c("short","mid","long")
+} else { stop("breaks must have length 3 or 4, ex: c(-Inf,10,Inf) for short/long") }
+
+survivorType = cut(as.matrix(dat[survival]), breaks = mybreaks,
+                   labels=timelabs
+                  )
+
+
 # subset based on validation set if provided
 if(!is.null(params$foldID)){
   set.seed(5)
@@ -161,8 +182,14 @@ if(!is.null(params$foldID)){
   dat <- dat[-validationidx,]
 }
 
-# @egates1 - can you overlap two histograms that separate the censored data?
-#  overlapping histograms are hard to read/interpret
+
+# Pre-select training row subsets for classification/regression
+# For classification, censored responders are Ok to include, for regression only use known time-to-events
+classificationTrainingRows <- dat[,status]==1 | survivorType == timelabs[length(timelabs)]
+regressionTrainingRows     <- dat[,status]==1
+
+
+#  overlapping histograms are hard to read/interpret, plotting individually
 histinfo<-hist(dat[,survival], 
      main="Histogram of outcome for all observations",
      xlab=survival, 
@@ -171,6 +198,7 @@ histinfo<-hist(dat[,survival],
 #     xlim=c(0,100),
      las=1, 
      breaks=50)
+print("")
 
 hist(dat[dat[,status] == 1,survival], 
      main="Histogram of NON-censored observations", 
@@ -181,7 +209,7 @@ hist(dat[dat[,status] == 1,survival],
      las=1, 
      breaks=50,
      add = F)
-
+print("")
 
 hist(dat[dat[,status] != 1,survival], 
      main="Histogram censored observations", 
@@ -226,9 +254,9 @@ if(params$plot){
     if(!is.factor(dat[,varname])){
 
       maxrow <- which(dat[,varname] == max(dat[,varname]))
-      hist(dat[,varname], col="gray", main = paste("Max in row:", maxrow), xlab=varname)
+      hist(dat[,varname], col="gray", main = paste("All observations\nMax in row:", maxrow), xlab=varname)
 #      plot(dat[dat[,status]==1,varname], dat[dat[,status]==1,survival], xlab=varname, ylab=survival, pch=21, bg='gray',col='black', main=sprintf("Pearson r: %0.3f, non-censored only",cor(dat[dat[,status]==1,varname],dat[dat[,status]==1,survival],method="pearson")))
-      plot(dat[,varname], dat[,survival], xlab=varname, ylab=survival, pch=21, bg=dat[,status],col="black", main=sprintf("Pearson r: %0.3f, unfilled=censored",cor(dat[,varname],dat[,survival],method="pearson")))
+      plot(dat[,varname], dat[,survival], xlab=varname, ylab=survival, pch=21, bg=dat[,status],col="black", main=sprintf("Pearson r on non-censored: %0.3f,\nunfilled=censored",cor(dat[regressionTrainingRows,varname],dat[regressionTrainingRows,survival],method="pearson")))
       print(summary(dat[,varname]))
     }
   }
@@ -250,27 +278,27 @@ if(params$plot){
 
 ```{r Univariate Filter, echo=FALSE, warning=FALSE, message=FALSE, fig.width=6, fig.height=7}
 
+## Moved to first block
+#if(!is.null(params$breaks)){
+#  mybreaks = params$breaks
+#} else {
+#  print("No time breaks given, cutting survival times into two equal groups")
+#  mybreaks = c(-Inf,median(dat[,survival]),Inf)
+#}
 
-if(!is.null(params$breaks)){
-  mybreaks = params$breaks
-} else {
-  print("No time breaks given, cutting survival times into two equal groups")
-  mybreaks = c(-Inf,median(dat[,survival]),Inf)
-}
 
 
+#if( any(mybreaks %in% dat[,survival]) ){warning("One survival time is exactly coincident with a break value, this will create a NA")}
+#
+#if(length(mybreaks ) ==3) {
+# timelabs <- c("short","long")
+#} else if(length(mybreaks) ==4){
+# timelabs <-c("short","mid","long")
+#} else { stop("breaks must have length 3 or 4, ex: c(-Inf,10,Inf) for short/long") }
 
-if( any(mybreaks %in% dat[,survival]) ){warning("One survival time is exactly coincident with a break value, this will create a NA")}
-
-if(length(mybreaks ) ==3) {
- timelabs <- c("short","long")
-} else if(length(mybreaks) ==4){
- timelabs <-c("short","mid","long")
-} else { stop("breaks must have length 3 or 4, ex: c(-Inf,10,Inf) for short/long") }
-
-survivorType = cut(as.matrix(dat[survival]), breaks = mybreaks,
-                   labels=timelabs
-                  )
+#survivorType = cut(as.matrix(dat[survival]), breaks = mybreaks,
+#                   labels=timelabs
+#                  )
 
 datClass <- dat
 datClass$survivorType <- survivorType
@@ -335,7 +363,7 @@ Filteredinputs <- setdiff(inputs,params$fixed_inputs)
 #apply correlation removal (not to fixed inputs)
 
 if(length(Filteredinputs)>1){
-  pp <- preProcess(dat[dat[,status]==1 | datClass$survivorType == timelabs[length(timelabs)],Filteredinputs], method = ppMethods, cutoff=params$cutoff)
+  pp <- preProcess(dat[classificationTrainingRows,Filteredinputs], method = ppMethods, cutoff=params$cutoff)
 
   print(pp)
 
@@ -351,7 +379,7 @@ if(length(Filteredinputs)>1){
 if(params$boruta){
 
 #TODO: document boruta "Confirmed" vs "Tentative"
-bor <- Boruta(x=datClass[dat[,status]==1 | datClass$survivorType == timelabs[length(timelabs)], borutaInputs ], y=datClass[dat[,status]==1 | datClass$survivorType == timelabs[length(timelabs)], "survivorType"], pValue=.35)
+bor <- Boruta(x=datClass[classificationTrainingRows, borutaInputs ], y=datClass[classificationTrainingRows, "survivorType"], pValue=.35)
 variableSelections$boruta <- union(params$fixed_inputs, names(datClass[,borutaInputs ])[which(bor$finalDecision == "Confirmed")])
 
 #if boruta rejects everything, remove it from selections
@@ -367,7 +395,7 @@ print(bor)
 
 if(length(variableSelections$boruta) > 1 & params$plot){
 
-correlations <- cor(Filter(is.numeric,dat[dat[,status]==1 | datClass$survivorType == timelabs[length(timelabs)],variableSelections$boruta]), use="pairwise")
+correlations <- cor(Filter(is.numeric,dat[classificationTrainingRows,variableSelections$boruta]), use="pairwise")
    corrplot(correlations,
    title = "Correlations for Boruta method",
    mar = c(1,2,2,0),
@@ -528,11 +556,11 @@ for(jjj in 1:length(variableSelections)){
 #take uncensored rows (leave censored rows if survivor type is "long")
 
 if(! is.null(params$status)){
-  modeldata  <- datClass[ (datClass[,status]==1 | datClass$survivorType == timelabs[length(timelabs)] ), c("survivorType",variableSelections[[jjj]])]
-  weightList <- datClass[  (datClass[,status]==1 | datClass$survivorType == timelabs[length(timelabs)] ), trainingWeights]
+  modeldata  <- datClass[ classificationTrainingRows, c("survivorType",variableSelections[[jjj]])]
+  weightList <- datClass[ classificationTrainingRows, trainingWeights]
 } else {
   modeldata  <- datClass[,c("survivorType",variableSelections[[jjj]])]
-  weightList <- datClass[  (datClass[,status]==1 | datClass$survivorType == timelabs[length(timelabs)] ), trainingWeights]
+  weightList <- datClass[, trainingWeights]
 }
 
 # RE seeding: Hawthorn et al, "The design and analysis of benchmark experiments" (2005)
@@ -728,11 +756,11 @@ acc <- list()
 for(jjj in 1:length(variableSelections)){
 
 if(! is.null(params$status) ){
-  modeldata  <- dat[   dat[,status]==1 | datClass$survivorType == timelabs[length(timelabs)]  , c(survival,variableSelections[[jjj]])]
-  weightList <- dat[  (dat[,status]==1 | datClass$survivorType == timelabs[length(timelabs)] ), trainingWeights]
+  modeldata  <- dat[ regressionTrainingRows , c(survival,variableSelections[[jjj]])]
+  weightList <- dat[ regressionTrainingRows , trainingWeights]
 } else {
-  modeldata  <- dat[   dat[,status]==1 | datClass$survivorType == timelabs[length(timelabs)]  , c(survival,variableSelections[[jjj]])]
-  weightList <- dat[  (dat[,status]==1 | datClass$survivorType == timelabs[length(timelabs)] ), trainingWeights]
+  modeldata  <- dat[ regressionTrainingRows , c(survival,variableSelections[[jjj]])]
+  weightList <- dat[, trainingWeights]
 }
 # RE seeding: Hawthorn et al, "The design and analysis of benchmark experiments" (2005)
 
@@ -766,10 +794,11 @@ if(params$leaveOneOut){
   par(mar=c(8,5,1,1))
   barplot(unlist(acc),las=2, ylim=c(0,1),
     ylab=paste("training set LOOCV",metric))
- 
-  #pred vs obs
-  plot(x=results$obs,y=results$pred, ylab="Predicted survival", xlab="Actual survival", main="non-censored only", xlim=c(0,max(dat[[survival]])), ylim=c(0,max(dat[[survival]]))
-      )
+
+## Redundant with other plots
+#  #pred vs obs
+#  plot(x=results$obs,y=results$pred, ylab="Predicted survival", xlab="Actual survival", main="non-censored only", xlim=c(0,max(dat[[survival]])), ylim=c(0,max(dat[[survival]]))
+#      )
    
 } else {
   rs <- resamples(models)
@@ -802,12 +831,9 @@ if(params$leaveOneOut){
 # Add predictions on censored data
 fullPreds <- numeric(nrow(survObj))
 
-fullPreds[dat[,status] ==1 ]  = bestmod$pred$pred #LOOCV on non-censored
+fullPreds[regressionTrainingRows]  = bestmod$pred$pred #LOOCV on non-censored
 #make predictions on censored non-responders
-fullPreds[dat[,status] !=1] = predict(bestmod,dat[dat[status] != 1 & datClass$survivorType != timelabs[length(timelabs)],])
-
-
-#dat[,params$status]==1 | 
+fullPreds[!regressionTrainingRows] = predict(bestmod,dat[!regressionTrainingRows,])
 
 print("C index (Concordance) for best model: 0.5 represents random prediction")
 print(survConcordance(survObj ~ fullPreds))
@@ -824,6 +850,13 @@ results <- data.frame(status = factor(dat[,status]),
                       training_err = predict(bestmod,newdata=dat) - dat[,survival],
                       testing_err = fullPreds - dat[,survival]
 )
+
+if(!is.null(trainingWeights)){
+results[,'weights'] <- dat[,trainingWeights]
+results$weightedTestingResidual  <- results$weights*abs(results$testing_err)
+results$weightedTrainingResidual <- results$weights*abs(results$training_err)
+}
+
 
 #predict function uses final model by default
 #compare training, testing errors
@@ -885,6 +918,25 @@ p5 <- ggplot(data=meltres) +
 
 p5
 
+
+#Weighted residual plot
+
+p6 <- ggplot(data=results) +
+geom_point(aes(x=obs,y=weightedTrainingResidual, col=status)) +
+ylab("Weight*|Residual| (training set)") +
+scale_color_manual(values=c("red","black")) +
+xlab(paste("Observed",survival,sep=" ")) +
+theme_light(base_size=12)
+
+p7 <- ggplot(data=results) +
+geom_point(aes(x=obs,y=weightedTestingResidual, col=status)) +
+ylab("Weight*|Residual| (testing set)") +
+scale_color_manual(values=c("red","black")) +
+xlab(paste("Observed",survival,sep=" ")) +
+theme_light(base_size=12)
+
+p6
+p7
 
 ```
 
@@ -970,22 +1022,22 @@ kable(data.frame(Actual=validationdatReduced[,survival],PredictedContinuous=vali
 
 
 if(!is.null(params$foldID)){
-  trainingpredname <- paste("LOOCVPreds_exceptfold",params$foldID,sep="")
+  finalpredname <- paste("LOOCVPreds_exceptfold",params$foldID,sep="")
 
-  if(trainingpredname %in% names(datFull)){
+  if(finalpredname %in% names(datFull)){
     print(sprintf("cross-validation predictions for fold %s already found, compare differences below:", params$foldID))
     print("existing predictions (may be out of order):")
-    kable(data.frame(existing=datFull[rownames(dat),trainingpredname],new=results$pred))
+    kable(data.frame(existing=datFull[rownames(dat),finalpredname],new=results$pred))
     
   } else {
-  datFull[trainingpredname] <- NA
-  datFull[rownames(dat)[results$rowIndex],trainingpredname] <- results$pred  #trickey line of code since results$rowIndex referes to rows of dat not datFull
+  datFull[finalpredname] <- NA
+  datFull[rownames(dat)[results$rowIndex],finalpredname] <- results$pred  #trickey line of code since results$rowIndex referes to rows of dat not datFull
     }
 
 } else { #if no validation fold, write all predictions
-  trainingpredname <- "fullPreds"
-  datFull[,trainingpredname] <- NA
-  datFull[rownames(dat),trainingpredname] <- fullPreds  #trickey line of code since results$rowIndex referes to rows of dat not datFull
+  finalpredname <- "finalPredictions"
+  datFull[,finalpredname] <- NA
+  datFull[rownames(dat),finalpredname] <- fullPreds  #trickey line of code since results$rowIndex referes to rows of dat not datFull
 }
 
 
@@ -1009,18 +1061,19 @@ datFull[which(datFull$validationFolds == params$foldID), predname] <- validation
 print("summary of predictions:")
 
 if(!is.null(params$foldID)){
-  kable(datFull[,c(survival,status,predname,trainingpredname)])
+  kable(datFull[,c(survival,status,predname,finalpredname)])
 } else {
-  kable(datFull[,c(survival,status,trainingpredname)])
+  kable(datFull[,c(survival,status,finalpredname)])
 
-  print(roc(datFull[,survival] < 100, datFull[,trainingpredname] ))
-  plot(roc(datFull[,survival] < 100, datFull[,trainingpredname] ))
+  print(roc(datFull[,survival] < 100, datFull[,finalpredname] ))
+  plot(roc(datFull[,survival] < 100, datFull[,finalpredname] ))
+print("")
 # @egates1 need precision recall curves
 # https://towardsdatascience.com/what-metrics-should-we-use-on-imbalanced-data-set-precision-recall-roc-e2e79252aeba
 #  Using packace "PPROC"
 
 #May give "NA" if NAs are present, currently hacked to remove NA predictions
-PR1 <- pr.curve(weights.class0=as.numeric(datFull[!is.na(datFull[,trainingpredname]),survival] < 100), scores.class0=na.omit(datFull[,trainingpredname]), curve=T)
+PR1 <- pr.curve(weights.class0=as.numeric(datFull[!is.na(datFull[,finalpredname]),survival] < 100), scores.class0=na.omit(datFull[,finalpredname]), curve=T)
 
 PR1
 plot(PR1)
