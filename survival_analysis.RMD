@@ -65,6 +65,7 @@ Print params to stdout: `r print(params)`
 
 ```{r libs, echo=FALSE}
 
+# install.packages("PRROC",repos='http://cran.us.r-project.org')
 libs <- c("corrplot", "survival", "ggplot2", "caret", "knitr", "MASS", "Boruta", "gridExtra", "randomForest","reshape2","glmnet", "pROC", "PRROC")
 
 invisible(lapply(libs, require,character.only=T))
@@ -1064,19 +1065,22 @@ if(!is.null(params$foldID)){
   kable(datFull[,c(survival,status,predname,finalpredname)])
 } else {
   kable(datFull[,c(survival,status,finalpredname)])
-
-  print(roc(datFull[,survival] < 100, datFull[,finalpredname] ))
-  plot(roc(datFull[,survival] < 100, datFull[,finalpredname] ))
 print("")
-# @egates1 need precision recall curves
-# https://towardsdatascience.com/what-metrics-should-we-use-on-imbalanced-data-set-precision-recall-roc-e2e79252aeba
-#  Using packace "PPROC"
 
-#May give "NA" if NAs are present, currently hacked to remove NA predictions
-PR1 <- pr.curve(weights.class0=as.numeric(datFull[!is.na(datFull[,finalpredname]),survival] < 100), scores.class0=na.omit(datFull[,finalpredname]), curve=T)
+  # HACK global search
+  for(iii in seq(from=10, to=100, by=10))
+   {
+    rocfromthreshold = roc(datFull[,survival] < iii, datFull[,finalpredname] ); print( rocfromthreshold); plot(rocfromthreshold)
+    print("")
+    # https://towardsdatascience.com/what-metrics-should-we-use-on-imbalanced-data-set-precision-recall-roc-e2e79252aeba
+    #  Using packace "PPROC"
 
-PR1
-plot(PR1)
+   #May give "NA" if NAs are present, currently hacked to remove NA predictions
+    PR1 <- pr.curve(weights.class0=as.numeric(datFull[!is.na(datFull[,finalpredname]),survival] < iii), scores.class0=na.omit(datFull[,finalpredname]), curve=T)
+    print(PR1)
+    plot(PR1)
+    print("")
+   }
 
 }
 
