@@ -14,6 +14,7 @@ params:
   nfold:            !r NULL
   leaveOneOut:      !r TRUE 
   foldID:           !r NULL
+  summaryfilebase:  !r NULL
   cutoff:              0.7
   boruta:           !r TRUE
   univariate:       !r TRUE
@@ -1081,13 +1082,12 @@ if(!is.null(params$foldID)){
     PR1 <- pr.curve(weights.class0=as.numeric(datFull[!is.na(datFull[,finalpredname]),survival] < iii), scores.class0=na.omit(datFull[,finalpredname]), curve=T)
     plot(PR1)
     print(PR1)
-
-    outputsummaryfile =  paste( 'analysis',trainingWeights,paste0('summary',iii,'.csv'),sep='/')
+    # HACK - @egates need access to the output_file variable from the command line input
+    outputsummaryfile =  paste0(params$summaryfilebase ,iii,'.csv')
     write.csv(rbind(rocfromthreshold$auc,PR1$auc.integral), row.names=TRUE, outputsummaryfile  )
    }
 
 }
-
 
 
 if(is.null(params$outCsvName)){
