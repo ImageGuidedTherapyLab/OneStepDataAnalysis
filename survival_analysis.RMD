@@ -4,9 +4,10 @@ output: pdf_document
 params:
   csvPath:          exampledata.csv
   outCsvName:       !r NULL
+  output_file:      !r NULL
   survival:         survival
   status:           !r NULL 
-  regexp:           !r "firstorder"
+  regexp:           original
   fixed_inputs:     !r NULL
   exclude_inputs:   !r NULL  
   weights:          !r NULL
@@ -604,13 +605,13 @@ acc[[model_name]] <- max(modelsClass[[model_name]]$results[metric])
 }
 
 #TODO: enable k-fold, check if this works with not LOOCV
-if(params$leaveOneOut){
+#if(params$leaveOneOut){
   maxacc <- max(unlist(acc))
   maxmodels <- names(which(acc==maxacc))
   bestClassifier <- modelsClass[[maxmodels[[1]]]] #pick first by default
   resultsClass <- bestClassifier$pred
 
-}
+#}
 
 # print all model accuracies
 print(sprintf("%d rows used for classification", nrow(modeldata)))
@@ -835,7 +836,8 @@ if(params$leaveOneOut){
   names(acc) <- rs$models
   maxacc <- max(apply(acc,2,mean))
   maxmodels <- rs$models[apply(acc,2,mean)==maxacc]
-  
+  bestmod <- models[[maxmodels[[1]]]] #pick first by default
+
   # plot +1 to col arg keeps one box from being black
   par(mar=c(8,5,1,1))
   boxplot(acc,col=(as.numeric(as.factor(rs$methods))+1), las=2,
