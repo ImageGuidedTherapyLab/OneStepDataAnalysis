@@ -44,7 +44,7 @@ hierarch adds predicted survivor type to all regresion modeling by adding predic
 
 cutoff is a correlation threshold that roughly defines equivalent variables. It is used to 1) to filter inputs before boruta method, 2) determine how manysimilar variables to the final model inputs to print. Recommended to keep >0.7
 
-nfold breaks the data into n evenly distrubuted folds. Used with foldID to holdout a validation set.
+nfold breaks the data into n evenly distrubuted folds. Used with foldID to holdout an independent test set. This is held out for the entire script and used to benchmark the accuracy of the final model.
 
 foldID (ex. 4) is used as the hold out set and the full script is run on just the remaining data (ex. fold 1,2,3 and 5 if nfold=5). Default NULL uses all folds as training.
 
@@ -189,6 +189,29 @@ if(!is.null(params$foldID)){
 # For classification, censored responders are Ok to include, for regression only use known time-to-events
 classificationTrainingRows <- dat[,status]==1 | survivorType == timelabs[length(timelabs)]
 regressionTrainingRows     <- dat[,status]==1 | survivorType == timelabs[length(timelabs)]
+
+# create data split for LOOCV or k-fold
+if(params$leaveOneOut) {
+  classificationTrainingFolds <- lapply(1:sum(classificationTrainingRows),function(x) setdiff(1:sum(classificationTrainingRows), x))
+  regressionTrainingFolds <-     lapply(1:sum(regressionTrainingRows),    function(x) setdiff(1:sum(regressionTrainingRows), x))
+} else {
+#default else use nfold
+  set.seed(12)
+  classificationTrainingFolds <- createFolds(dat[classificationTrainingRows,survival],
+                                             k=ifelse(is.null(params$nfold),5,params$nfold),
+                                             list=TRUE,
+                                             returnTrain=TRUE)
+  set.seed(12)
+  regressionTrainingFolds <-     createFolds(dat[regressionTrainingRows,survival],
+                                             k=ifelse(is.null(params$nfold),5,params$nfold),
+                                             list=TRUE,
+                                             returnTrain=TRUE)
+}
+
+print("List of training data used for each fold of CLASSIFICATION cross validation:")
+ifelse(params$leaveOneOut,print("Leave-One-Out"),print(classificationTrainingFolds))
+print("List of training data used for each fold of REGRESSION cross validation:")
+ifelse(params$leaveOneOut,print("Leave-One-Out"),print(regressionTrainingFolds))
 
 
 #  overlapping histograms are hard to read/interpret, plotting individually
@@ -542,7 +565,7 @@ dataparams   <- list(form = modelformula,
                                              classProbs=TRUE,
                                              returnResamp = "final",
                                              savePredictions = "final",
-                                             #number = 10,
+                                             index = classificationTrainingFolds,                                                                     #number = 10,
                                              #repeats= 5,
                                              verboseIter = F) # use method="none" to disable grid tuning for speed
                      )  
@@ -558,11 +581,11 @@ for(jjj in 1:length(variableSelections)){
 #take uncensored rows (leave censored rows if survivor type is "long")
 
 if(! is.null(params$status)){
-  modeldata  <- datClass[ classificationTrainingRows, c("survivorType",variableSelections[[jjj]])]
-  weightList <- datClass[ classificationTrainingRows, trainingWeights]
+  modeldata  <- datClass[classificationTrainingRows, c("survivorType",variableSelections[[jjj]])]
+  weightList <- datClass[classificationTrainingRows, trainingWeights]
 } else {
-  modeldata  <- datClass[,c("survivorType",variableSelections[[jjj]])]
-  weightList <- datClass[, trainingWeights]
+  modeldata  <- datClass[classificationTrainingRows,c("survivorType",variableSelections[[jjj]])]
+  weightList <- datClass[classificationTrainingRows, trainingWeights]
 }
 
 # RE seeding: Hawthorn et al, "The design and analysis of benchmark experiments" (2005)
@@ -571,7 +594,7 @@ for (iii in 1:length(modelparams)){
 model_name <-paste("Class", names(variableSelections)[jjj], names(modelparams)[iii],sep="_")
 print(model_name)
 set.seed(3141) #seed before train to get same subsamples
-invisible(  modelsClass[[model_name]] <- do.call(caret::train, c(caretparams[[iii]], list(data=modeldata, weights=weightList)))  )
+modelsClass[[model_name]] <- do.call(caret::train, c(caretparams[[iii]], list(data=modeldata, weights=weightList)))  
 metric <- modelsClass[[model_name]]$metric
 
 #get best acuracy manually for LOOCV
@@ -739,6 +762,7 @@ dataparams   <- list(form = modelformula,
                                              classProbs=FALSE,
                                              returnResamp = "final",
                                              savePredictions = "final",
+                                             index = regressionTrainingFolds,
                                              #number = 10,
                                              #repeats= 5,
                                              verboseIter = F) # use method="none" to disable grid tuning for speed
@@ -758,11 +782,12 @@ acc <- list()
 for(jjj in 1:length(variableSelections)){
 
 if(! is.null(params$status) ){
-  modeldata  <- dat[ regressionTrainingRows , c(survival,variableSelections[[jjj]])]
-  weightList <- dat[ regressionTrainingRows , trainingWeights]
+
+  modeldata  <- dat[regressionTrainingRows, c(survival,variableSelections[[jjj]])]
+  weightList <- dat[regressionTrainingRows, trainingWeights]
 } else {
-  modeldata  <- dat[ regressionTrainingRows , c(survival,variableSelections[[jjj]])]
-  weightList <- dat[, trainingWeights]
+  modeldata  <- dat[regressionTrainingRows, c(survival,variableSelections[[jjj]])]
+  weightList <- dat[regressionTrainingRows, trainingWeights]
 }
 # RE seeding: Hawthorn et al, "The design and analysis of benchmark experiments" (2005)
 
@@ -770,7 +795,7 @@ for (iii in 1:length(modelparams)){
 model_name <-paste(names(variableSelections)[jjj], names(modelparams)[iii],sep="_")
 print(model_name)
 set.seed(3141) #seed before train to get same subsamples
-invisible(  models[[model_name]] <- do.call(caret::train, c(caretparams[[iii]], list(data=modeldata, weights=weightList)))  )
+models[[model_name]] <- do.call(caret::train, c(caretparams[[iii]], list(data=modeldata, weights=weightList))) 
 metric <- models[[model_name]]$metric
 
 #get best acuracy manually for LOOCV
