@@ -4,7 +4,6 @@ output: pdf_document
 params:
   csvPath:          exampledata.csv
   outCsvName:       !r NULL
-  output_file:      !r NULL
   survival:         survival
   status:           !r NULL 
   regexp:           original
