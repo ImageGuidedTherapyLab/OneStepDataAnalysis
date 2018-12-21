@@ -667,6 +667,12 @@ ROC1 <- roc(response = datClass$survivorType,
 
 print(ROC1)
 plot(ROC1)
+
+# plot accuracy
+myaccuracy = (ROC1$specificities * sum(ROC1$response==ROC1$levels[1]) + ROC1$sensitivities * sum(ROC1$response==ROC1$levels[2]) ) / length(ROC1$response)
+plot(ROC1$thresholds,myaccuracy, xlab = "probability threshold", ylab= "Accuracy" )
+
+
 }
 
 ```
