@@ -594,6 +594,7 @@ for (iii in 1:length(modelparams)){
 model_name <-paste("Class", names(variableSelections)[jjj], names(modelparams)[iii],sep="_")
 print(model_name)
 set.seed(3141) #seed before train to get same subsamples
+# FIXME: @egates, RF class weights not used
 modelsClass[[model_name]] <- do.call(caret::train, c(caretparams[[iii]], list(data=modeldata, weights=weightList)))  
 metric <- modelsClass[[model_name]]$metric
 
