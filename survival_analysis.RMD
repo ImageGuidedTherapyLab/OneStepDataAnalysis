@@ -624,6 +624,7 @@ if(length(timelabs) == 2){
 ROCdropcensor <- roc(response = resultsClass$obs, levels = timelabs, predictor = resultsClass$long)
 print(ROCdropcensor)
 plot(ROCdropcensor) 
+print("")
 
 dropcensoraccuracy = (ROCdropcensor$specificities * sum(ROCdropcensor$response==ROCdropcensor$levels[1]) + ROCdropcensor$sensitivities * sum(ROCdropcensor$response==ROCdropcensor$levels[2]) ) / length(ROCdropcensor$response)
 plot(ROCdropcensor$thresholds,dropcensoraccuracy , xlab = "probability threshold", ylab= "Accuracy" )
@@ -678,6 +679,7 @@ ROC1 <- roc(response = datClass$survivorType,
 
 print(ROC1)
 plot(ROC1)
+print("")
 
 # plot accuracy
 fulldataaccuracy = (ROC1$specificities * sum(ROC1$response==ROC1$levels[1]) + ROC1$sensitivities * sum(ROC1$response==ROC1$levels[2]) ) / length(ROC1$response)
