@@ -620,7 +620,7 @@ print(bestClassifier)
 print(caret::confusionMatrix(resultsClass$pred, reference = resultsClass$obs) )
 
 if(length(timelabs) == 2){
-# FIXME - @egates1, can you generalize the predictor input? 
+# FIXME: @egates1, can you generalize the predictor input? 
 ROCdropcensor <- roc(response = resultsClass$obs, levels = timelabs, predictor = resultsClass$long)
 print(ROCdropcensor)
 plot(ROCdropcensor) 
