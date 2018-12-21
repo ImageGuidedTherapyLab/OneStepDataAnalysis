@@ -619,6 +619,17 @@ kable(unlist(acc))
 print(bestClassifier)
 print(caret::confusionMatrix(resultsClass$pred, reference = resultsClass$obs) )
 
+if(length(timelabs) == 2){
+# FIXME - @egates1, can you generalize the predictor input? 
+ROCdropcensor <- roc(response = resultsClass$obs, levels = timelabs, predictor = resultsClass$long)
+print(ROCdropcensor)
+plot(ROCdropcensor) 
+
+dropcensoraccuracy = (ROCdropcensor$specificities * sum(ROCdropcensor$response==ROCdropcensor$levels[1]) + ROCdropcensor$sensitivities * sum(ROCdropcensor$response==ROCdropcensor$levels[2]) ) / length(ROCdropcensor$response)
+plot(ROCdropcensor$thresholds,dropcensoraccuracy , xlab = "probability threshold", ylab= "Accuracy" )
+
+}
+
 print("Concordance < 0.5 may be due to improper factor level ordering")
 
 #Add predictions on censored data as well
@@ -669,8 +680,8 @@ print(ROC1)
 plot(ROC1)
 
 # plot accuracy
-myaccuracy = (ROC1$specificities * sum(ROC1$response==ROC1$levels[1]) + ROC1$sensitivities * sum(ROC1$response==ROC1$levels[2]) ) / length(ROC1$response)
-plot(ROC1$thresholds,myaccuracy, xlab = "probability threshold", ylab= "Accuracy" )
+fulldataaccuracy = (ROC1$specificities * sum(ROC1$response==ROC1$levels[1]) + ROC1$sensitivities * sum(ROC1$response==ROC1$levels[2]) ) / length(ROC1$response)
+plot(ROC1$thresholds,fulldataaccuracy, xlab = "probability threshold", ylab= "Accuracy" )
 
 
 }
