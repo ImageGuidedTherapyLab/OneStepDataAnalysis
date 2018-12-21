@@ -618,7 +618,7 @@ print(sprintf("%d rows used for classification", nrow(modeldata)))
 print("Table of accuracies by model and input variables")
 kable(unlist(acc))
 print(bestClassifier)
-print(caret::confusionMatrix(resultsClass$pred, reference = resultsClass$obs) )
+print(caret::confusionMatrix(resultsClass$pred, reference = resultsClass$obs, positive = timelabs[length(timelabs)]) )
 
 if(length(timelabs) == 2){
 # FIXME: @egates1, can you generalize the predictor input? 
@@ -629,6 +629,12 @@ print("")
 
 dropcensoraccuracy = (ROCdropcensor$specificities * sum(ROCdropcensor$response==ROCdropcensor$levels[1]) + ROCdropcensor$sensitivities * sum(ROCdropcensor$response==ROCdropcensor$levels[2]) ) / length(ROCdropcensor$response)
 plot(ROCdropcensor$thresholds,dropcensoraccuracy , xlab = "probability threshold", ylab= "Accuracy" )
+
+# confusion matrix at max
+idmax = which(dropcensoraccuracy ==max(dropcensoraccuracy ))
+maxthreshold = ROCdropcensor$thresholds[idmax ]
+print(caret::confusionMatrix( ifelse( resultsClass$long < maxthreshold , timelabs[1],timelabs[length(timelabs)]), reference = resultsClass$obs, positive = timelabs[length(timelabs)]) )
+
 
 }
 
@@ -686,6 +692,10 @@ print("")
 fulldataaccuracy = (ROC1$specificities * sum(ROC1$response==ROC1$levels[1]) + ROC1$sensitivities * sum(ROC1$response==ROC1$levels[2]) ) / length(ROC1$response)
 plot(ROC1$thresholds,fulldataaccuracy, xlab = "probability threshold", ylab= "Accuracy" )
 
+# confusion matrix at max
+idmax = which(fulldataaccuracy ==max(fulldataaccuracy ))
+maxthreshold = ROC1$thresholds[idmax ]
+print(caret::confusionMatrix( ifelse( probLong < maxthreshold , timelabs[1],timelabs[length(timelabs)]), reference = datClass$survivorType,  positive = timelabs[length(timelabs)]) )
 
 }
 
