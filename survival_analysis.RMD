@@ -4,7 +4,6 @@ output: pdf_document
 params:
   csvPath:          exampledata.csv
   outCsvName:       !r NULL
-  output_file:      !r NULL
   survival:         survival
   status:           !r NULL 
   regexp:           original
@@ -333,7 +332,9 @@ datClass$survivorType <- survivorType
 variableSelections <- list()
 
 #use fixed only if length > 1 (avoid bugs)
-if(!is.null(params$fixed_inputs) & length(params$fixed_inputs) > 3){
+scopefixed_inputs = NULL 
+if(!is.null(params$fixed_inputs) ){
+  scopefixed_inputs = params$fixed_inputs 
   variableSelections$fixed <- params$fixed_inputs
 }
 
@@ -595,6 +596,7 @@ for (iii in 1:length(modelparams)){
 model_name <-paste("Class", names(variableSelections)[jjj], names(modelparams)[iii],sep="_")
 print(model_name)
 set.seed(3141) #seed before train to get same subsamples
+# FIXME: @egates, RF class weights not used
 modelsClass[[model_name]] <- do.call(caret::train, c(caretparams[[iii]], list(data=modeldata, weights=weightList)))  
 metric <- modelsClass[[model_name]]$metric
 
@@ -618,7 +620,25 @@ print(sprintf("%d rows used for classification", nrow(modeldata)))
 print("Table of accuracies by model and input variables")
 kable(unlist(acc))
 print(bestClassifier)
-print(caret::confusionMatrix(resultsClass$pred, reference = resultsClass$obs) )
+print(caret::confusionMatrix(resultsClass$pred, reference = resultsClass$obs, positive = timelabs[length(timelabs)]) )
+
+if(length(timelabs) == 2){
+# FIXME: @egates1, can you generalize the predictor input? 
+ROCdropcensor <- roc(response = resultsClass$obs, levels = timelabs, predictor = resultsClass$long)
+print(ROCdropcensor)
+plot(ROCdropcensor) 
+print("")
+
+dropcensoraccuracy = (ROCdropcensor$specificities * sum(ROCdropcensor$response==ROCdropcensor$levels[1]) + ROCdropcensor$sensitivities * sum(ROCdropcensor$response==ROCdropcensor$levels[2]) ) / length(ROCdropcensor$response)
+plot(ROCdropcensor$thresholds,dropcensoraccuracy , xlab = "probability threshold", ylab= "Accuracy" )
+
+# confusion matrix at max
+idmax = which(dropcensoraccuracy ==max(dropcensoraccuracy ))
+maxthreshold = ROCdropcensor$thresholds[idmax ]
+print(caret::confusionMatrix( ifelse( resultsClass$long < maxthreshold , timelabs[1],timelabs[length(timelabs)]), reference = resultsClass$obs, positive = timelabs[length(timelabs)]) )
+
+
+}
 
 print("Concordance < 0.5 may be due to improper factor level ordering")
 
@@ -628,6 +648,7 @@ fullClassPreds <- factor(levels = levels(datClass$survivorType))
 fullClassPreds[which(datClass[,status]!= 0)] = bestClassifier$pred$pred
 fullClassPreds[which(datClass[,status]== 0)] = predict(bestClassifier,datClass[datClass[status] != 1,]) #make predictions on censored obs
 
+  
 #WIP make this concordance meaningful
 print("Warning: concordance for class predictions might be erroneous") 
 print(survConcordance(survObj~fullClassPreds))
@@ -668,7 +689,36 @@ ROC1 <- roc(response = datClass$survivorType,
 
 print(ROC1)
 plot(ROC1)
+print("")
+
+# plot accuracy
+fulldataaccuracy = (ROC1$specificities * sum(ROC1$response==ROC1$levels[1]) + ROC1$sensitivities * sum(ROC1$response==ROC1$levels[2]) ) / length(ROC1$response)
+plot(ROC1$thresholds,fulldataaccuracy, xlab = "probability threshold", ylab= "Accuracy" )
+
+# confusion matrix at max
+idmax = which(fulldataaccuracy ==max(fulldataaccuracy ))
+maxthreshold = ROC1$thresholds[idmax ]
+print(caret::confusionMatrix( ifelse( probLong < maxthreshold , timelabs[1],timelabs[length(timelabs)]), reference = datClass$survivorType,  positive = timelabs[length(timelabs)]) )
+
 }
+
+#  use RF on fixed variables as reference control
+if(!is.null(scopefixed_inputs) ){
+fixedClassPreds <- numeric()
+fixedClassifier <- modelsClass$Class_fixed_forest
+fixedClassPreds[which(datClass[,status]!= 0)] = fixedClassifier$pred$pred 
+fixedClassPreds[which(datClass[,status]== 0)] = predict(fixedClassifier,datClass[datClass[status] != 1,])
+
+rocFixed <- roc(response = datClass$survivorType,
+                       levels = timelabs,
+                       predictor = fixedClassPreds)###
+
+print(rocFixed)
+plot(rocFixed)
+print("")
+
+}
+
 
 ```
 # CURRENTLY DISABLED:
