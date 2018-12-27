@@ -187,8 +187,10 @@ if(!is.null(params$foldID)){
 
 # Pre-select training row subsets for classification/regression
 # For classification, censored responders are Ok to include, for regression only use known time-to-events
-classificationTrainingRows <- dat[,status]==1 | survivorType == timelabs[length(timelabs)]
-regressionTrainingRows     <- dat[,status]==1 | survivorType == timelabs[length(timelabs)]
+classificationTrainingRows <- !is.na(dat[,status])
+regressionTrainingRows     <- !is.na(dat[,status])
+#classificationTrainingRows <- dat[,status]==1 | survivorType == timelabs[length(timelabs)]
+#regressionTrainingRows     <- dat[,status]==1 | survivorType == timelabs[length(timelabs)]
 
 # create data split for LOOCV or k-fold
 if(params$leaveOneOut) {
