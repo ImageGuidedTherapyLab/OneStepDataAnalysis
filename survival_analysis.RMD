@@ -722,11 +722,16 @@ print(caret::confusionMatrix( factor(ifelse( probLong < maxthreshold , timelabs[
 }
 
 #  use RF on fixed variables as reference control
+#  TODO: check if fixedClassifier needs to be changed to probability not factor output
 if(!is.null(scopefixed_inputs) ){
 fixedClassPreds <- numeric()
 fixedClassifier <- modelsClass$Class_fixed_forest
 fixedClassPreds[ classificationTrainingRows] = fixedClassifier$pred$pred 
-fixedClassPreds[!classificationTrainingRows] = predict(fixedClassifier,datClass[!classificationTrainingRows,])
+
+if(any(!classificationTrainingRows)){
+  fixedClassPreds[!classificationTrainingRows] = predict(fixedClassifier,datClass[!classificationTrainingRows,])
+}
+
 
 rocFixed <- roc(response = datClass$survivorType,
                        levels = timelabs,
