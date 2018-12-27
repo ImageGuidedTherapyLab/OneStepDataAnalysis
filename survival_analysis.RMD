@@ -635,7 +635,7 @@ plot(ROCdropcensor$thresholds,dropcensoraccuracy , xlab = "probability threshold
 # confusion matrix at max
 idmax = which(dropcensoraccuracy ==max(dropcensoraccuracy ))
 maxthreshold = ROCdropcensor$thresholds[idmax ]
-print(caret::confusionMatrix( ifelse( resultsClass$long < maxthreshold , timelabs[1],timelabs[length(timelabs)]), reference = resultsClass$obs, positive = timelabs[length(timelabs)]) )
+print(caret::confusionMatrix( factor(ifelse( resultsClass$long < maxthreshold , timelabs[1],timelabs[length(timelabs)]), levels=timelabs), reference = resultsClass$obs, positive = timelabs[length(timelabs)]) )
 
 
 }
@@ -677,10 +677,13 @@ if(length(timelabs) == 2){
 probLong <- numeric()
 
 #get probabilistic prediction
-probLong[which(datClass[,status] == 1)] = predict(bestClassifier,datClass[datClass[status] == 1,], type="prob")[[ timelabs[2] ]] #make predictions on known obs
+#probLong[which(datClass[,status] == 1)] = predict(bestClassifier,datClass[datClass[status] == 1,], type="prob")[[ timelabs[2] ]] #make predictions on known obs
 
-if( any(datClass[,status] != 1) ){
-probLong[which(datClass[,status] != 1)] = predict(bestClassifier,datClass[datClass[status] != 1,], type="prob")[[ timelabs[2] ]] #make predictions on censored obs
+#combine hold-out predictions 
+probLong[classificationTrainingRows] = bestClassifier$pred[, timelabs[2] ] #make predictions on known obs
+
+if( any(!classificationTrainingRows)){
+probLong[!classificationTrainingRows] = predict(bestClassifier,datClass[!classificationTrainingRows,], type="prob")[[ timelabs[2] ]] #make predictions on censored/short obsvervations
 }
 
 ROC1 <- roc(response = datClass$survivorType,
@@ -698,7 +701,23 @@ plot(ROC1$thresholds,fulldataaccuracy, xlab = "probability threshold", ylab= "Ac
 # confusion matrix at max
 idmax = which(fulldataaccuracy ==max(fulldataaccuracy ))
 maxthreshold = ROC1$thresholds[idmax ]
-print(caret::confusionMatrix( ifelse( probLong < maxthreshold , timelabs[1],timelabs[length(timelabs)]), reference = datClass$survivorType,  positive = timelabs[length(timelabs)]) )
+print(caret::confusionMatrix( factor(ifelse( probLong < maxthreshold , timelabs[1],timelabs[length(timelabs)]),levels=timelabs), reference = datClass$survivorType,  positive = timelabs[length(timelabs)]) )
+
+} else { #else >2 classes
+
+# WIP: finish multiclass ROC. Does this need retraining or just thresholding?
+  for(kkk in 1:(length(timelabs)-1 )){
+  shortclass <- paste(timelabs[1:kkk], collapse="_")
+  longclass  <- paste(timelabs[kkk+1:length(timelabs),collapse="_"])
+
+  
+
+
+  }
+
+
+
+
 
 }
 
@@ -706,8 +725,8 @@ print(caret::confusionMatrix( ifelse( probLong < maxthreshold , timelabs[1],time
 if(!is.null(scopefixed_inputs) ){
 fixedClassPreds <- numeric()
 fixedClassifier <- modelsClass$Class_fixed_forest
-fixedClassPreds[which(datClass[,status]!= 0)] = fixedClassifier$pred$pred 
-fixedClassPreds[which(datClass[,status]== 0)] = predict(fixedClassifier,datClass[datClass[status] != 1,])
+fixedClassPreds[ classificationTrainingRows] = fixedClassifier$pred$pred 
+fixedClassPreds[!classificationTrainingRows] = predict(fixedClassifier,datClass[!classificationTrainingRows,])
 
 rocFixed <- roc(response = datClass$survivorType,
                        levels = timelabs,
