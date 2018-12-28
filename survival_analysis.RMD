@@ -187,10 +187,10 @@ if(!is.null(params$foldID)){
 
 # Pre-select training row subsets for classification/regression
 # For classification, censored responders are Ok to include, for regression only use known time-to-events
-classificationTrainingRows <- !is.na(dat[,status])
-regressionTrainingRows     <- !is.na(dat[,status])
-#classificationTrainingRows <- dat[,status]==1 | survivorType == timelabs[length(timelabs)]
-#regressionTrainingRows     <- dat[,status]==1 | survivorType == timelabs[length(timelabs)]
+#classificationTrainingRows <- !is.na(dat[,status])
+#regressionTrainingRows     <- !is.na(dat[,status])
+classificationTrainingRows <- dat[,status]==1 | survivorType == timelabs[length(timelabs)]
+regressionTrainingRows     <- dat[,status]==1 
 
 # create data split for LOOCV or k-fold
 if(params$leaveOneOut) {
@@ -551,6 +551,7 @@ modelparams <- list(forest = list(method      = "rf",
                     #             MaxNWts = 10000,
                     #             trace   = FALSE,
                     #             maxit   = 100),
+                    # rpart = list(method = "rpart"),
                      svm = list(method = "svmRadial"),
                      gausspr = list(method="gaussprRadial")#,
 # LOGIT (glm) only uses two outputs
@@ -600,6 +601,10 @@ print(model_name)
 set.seed(3141) #seed before train to get same subsamples
 # FIXME: @egates, RF class weights not used
 modelsClass[[model_name]] <- do.call(caret::train, c(caretparams[[iii]], list(data=modeldata, weights=weightList)))  
+
+#Sort $pred data frame by row index
+modelsClass[[model_name]]$pred <- modelsClass[[model_name]]$pred[order(modelsClass[[model_name]]$pred$rowIndex),]
+
 metric <- modelsClass[[model_name]]$metric
 
 #get best acuracy manually for LOOCV
@@ -626,9 +631,9 @@ print(caret::confusionMatrix(resultsClass$pred, reference = resultsClass$obs, po
 
 if(length(timelabs) == 2){
 # FIXME: @egates1, can you generalize the predictor input? 
-ROCdropcensor <- roc(response = resultsClass$obs, levels = timelabs, predictor = resultsClass$long)
+ROCdropcensor <- roc(response = resultsClass$obs, levels = timelabs, predictor = resultsClass[,timelabs[length(timelabs)]])
 print(ROCdropcensor)
-plot(ROCdropcensor) 
+plot(ROCdropcensor, main="Only observations used for model building") 
 print("")
 
 dropcensoraccuracy = (ROCdropcensor$specificities * sum(ROCdropcensor$response==ROCdropcensor$levels[1]) + ROCdropcensor$sensitivities * sum(ROCdropcensor$response==ROCdropcensor$levels[2]) ) / length(ROCdropcensor$response)
@@ -647,9 +652,12 @@ print("Concordance < 0.5 may be due to improper factor level ordering")
 #Add predictions on censored data as well
 fullClassPreds <- factor(levels = levels(datClass$survivorType))
 
-fullClassPreds[which(datClass[,status]!= 0)] = bestClassifier$pred$pred
-fullClassPreds[which(datClass[,status]== 0)] = predict(bestClassifier,datClass[datClass[status] != 1,]) #make predictions on censored obs
+#use $pred$rowIndex in case pred/obs are out of order
+fullClassPreds[which(classificationTrainingRows)[bestClassifier$pred$rowIndex]] = bestClassifier$pred$pred
 
+if( any(!classificationTrainingRows)){
+  fullClassPreds[-which(classificationTrainingRows)[bestClassifier$pred$rowIndex]] = predict(bestClassifier,datClass[-which(classificationTrainingRows)[bestClassifier$pred$rowIndex],]) #make predictions on censored obs
+}
   
 #WIP make this concordance meaningful
 print("Warning: concordance for class predictions might be erroneous") 
@@ -682,19 +690,30 @@ probLong <- numeric()
 #probLong[which(datClass[,status] == 1)] = predict(bestClassifier,datClass[datClass[status] == 1,], type="prob")[[ timelabs[2] ]] #make predictions on known obs
 
 #combine hold-out predictions 
-probLong[classificationTrainingRows] = bestClassifier$pred[, timelabs[2] ] #make predictions on known obs
+probLong[which(classificationTrainingRows)[bestClassifier$pred$rowIndex]] = bestClassifier$pred[, timelabs[2] ] #make predictions on known obs
 
 if( any(!classificationTrainingRows)){
 probLong[!classificationTrainingRows] = predict(bestClassifier,datClass[!classificationTrainingRows,], type="prob")[[ timelabs[2] ]] #make predictions on censored/short obsvervations
 }
 
-ROC1 <- roc(response = datClass$survivorType,
+#includes censored observations
+ROC1 <- roc(response = datClass$survivorType, #probLong has the observations put in original order
                        levels = timelabs,
                        predictor = probLong)###
 
 print(ROC1)
-plot(ROC1)
+plot(ROC1, main="Includes all (i.e. censored) observations")
 print("")
+
+#Check if ROC1 reduces to ROCdropcensor if we manually take only training rows
+
+ROC1reduced <-  roc(response = datClass$survivorType[classificationTrainingRows],
+                      levels = timelabs,
+                   predictor = probLong[classificationTrainingRows])
+
+if(ROC1reduced$auc != ROCdropcensor$auc){
+  stop("ROCs do not agree, check for correct ordering of predicted values")
+}
 
 # plot accuracy
 fulldataaccuracy = (ROC1$specificities * sum(ROC1$response==ROC1$levels[1]) + ROC1$sensitivities * sum(ROC1$response==ROC1$levels[2]) ) / length(ROC1$response)
@@ -703,6 +722,8 @@ plot(ROC1$thresholds,fulldataaccuracy, xlab = "probability threshold", ylab= "Ac
 # confusion matrix at max
 idmax = which(fulldataaccuracy ==max(fulldataaccuracy ))
 maxthreshold = ROC1$thresholds[idmax ]
+
+print("Confusion Matrix for all observations (includes censored)")
 print(caret::confusionMatrix( factor(ifelse( probLong < maxthreshold , timelabs[1],timelabs[length(timelabs)]),levels=timelabs), reference = datClass$survivorType,  positive = timelabs[length(timelabs)]) )
 
 } else { #else >2 classes
@@ -725,13 +746,14 @@ print(caret::confusionMatrix( factor(ifelse( probLong < maxthreshold , timelabs[
 
 #  use RF on fixed variables as reference control
 #  TODO: check if fixedClassifier needs to be changed to probability not factor output
+#ENH: uses probability output instead of classification for ROC analysis
 if(!is.null(scopefixed_inputs) ){
 fixedClassPreds <- numeric()
 fixedClassifier <- modelsClass$Class_fixed_forest
-fixedClassPreds[ classificationTrainingRows] = fixedClassifier$pred$pred 
+fixedClassPreds[ classificationTrainingRows] = fixedClassifier$pred[order(fixedClassifier$pred$rowIndex),timelabs[length(timelabs)]] 
 
 if(any(!classificationTrainingRows)){
-  fixedClassPreds[!classificationTrainingRows] = predict(fixedClassifier,datClass[!classificationTrainingRows,])
+  fixedClassPreds[!classificationTrainingRows] = predict(fixedClassifier,datClass[!classificationTrainingRows,], type="prob")[,timelabs[length(timelabs)]]
 }
 
 
@@ -740,7 +762,7 @@ rocFixed <- roc(response = datClass$survivorType,
                        predictor = fixedClassPreds)###
 
 print(rocFixed)
-plot(rocFixed)
+plot(rocFixed, main="random forest with fixed inputs only. All observations")
 print("")
 
 }
@@ -823,7 +845,8 @@ modelparams <- list(forest = list(method      = "rf",
 #                                 maxit   = 100)#,
 #GLMNET bugged for DF data
 #                     glmnet = list(method="glmnet")#,                     
-#                     svm = list(method = "svmRadial")
+#                     svm = list(method = "svmRadial"),
+                     #rpart = list(method="rpart"),
                      gausspr = list(method="gaussprRadial")#,
                      )
 
@@ -875,6 +898,10 @@ set.seed(3141) #seed before train to get same subsamples
 models[[model_name]] <- do.call(caret::train, c(caretparams[[iii]], list(data=modeldata, weights=weightList))) 
 metric <- models[[model_name]]$metric
 
+#Sort $pred data frame by row index
+models[[model_name]]$pred <- models[[model_name]]$pred[order(models[[model_name]]$pred$rowIndex),]
+
+
 #get best acuracy manually for LOOCV
 acc[[model_name]] <- max(models[[model_name]]$results[metric])
 
@@ -910,8 +937,8 @@ if(params$leaveOneOut){
   
   acc        <- rs$values[,grepl(metric, names(rs$values))]
   names(acc) <- rs$models
-  maxacc <- max(apply(acc,2,mean))
-  maxmodels <- rs$models[apply(acc,2,mean)==maxacc]
+  maxacc <- max(apply(acc,2,mean),na.rm=TRUE)
+  maxmodels <- rs$models[apply(acc,2,mean,na.rm=TRUE)==maxacc]
   bestmod <- models[[maxmodels[[1]]]] #pick first by default
 
   # plot +1 to col arg keeps one box from being black
@@ -936,11 +963,14 @@ if(params$leaveOneOut){
 # Add predictions on censored data
 fullPreds <- numeric(nrow(survObj))
 
-fullPreds[regressionTrainingRows]  = bestmod$pred$pred #LOOCV on non-censored
-#make predictions on censored non-responders
-fullPreds[!regressionTrainingRows] = predict(bestmod,dat[!regressionTrainingRows,])
+fullPreds[which(regressionTrainingRows)[bestmod$pred$rowIndex]]  = bestmod$pred$pred #hold-out predictions on non-censored
 
-print("C index (Concordance) for best model: 0.5 represents random prediction")
+#make predictions on censored non-responders if any
+if( any(!regressionTrainingRows)){
+  fullPreds[!regressionTrainingRows] = predict(bestmod,dat[!regressionTrainingRows,])
+}
+
+print("C index (Concordance) for best model: 0.5 represents random prediction. Includes censored cases")
 print(survConcordance(survObj ~ fullPreds))
 
 print("Best model(s) and their inputs (ignore .outcome, it is not used in training)")
@@ -1135,8 +1165,8 @@ if(!is.null(params$foldID)){
     kable(data.frame(existing=datFull[rownames(dat),finalpredname],new=results$pred))
     
   } else {
-  datFull[finalpredname] <- NA
-  datFull[rownames(dat)[results$rowIndex],finalpredname] <- results$pred  #trickey line of code since results$rowIndex referes to rows of dat not datFull
+  datFull[,finalpredname] <- NA
+  datFull[rownames(dat),finalpredname] <- results$pred  #trickey line of code since results$rowIndex referes to rows of dat not datFull
     }
 
 } else { #if no validation fold, write all predictions
