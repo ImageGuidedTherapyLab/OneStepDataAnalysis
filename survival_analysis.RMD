@@ -185,6 +185,14 @@ if(!is.null(params$foldID)){
 }
 
 
+# If no status, assume all obserations are non-censored
+if( is.null(status) || !(status %in% names(dat))) {
+  status <- "status"
+  dat[status] <- 1
+  print("Assuming no subjects censored, either no status is given or status variable not found") 
+  }
+
+
 # Pre-select training row subsets for classification/regression
 # For classification, censored responders are Ok to include, for regression only use known time-to-events
 #classificationTrainingRows <- !is.na(dat[,status])
@@ -238,28 +246,22 @@ hist(dat[dat[,status] == 1,survival],
      add = F)
 print("")
 
-hist(dat[dat[,status] != 1,survival], 
-     main="Histogram censored observations", 
-     xlab=survival, 
-     border="black", 
-     col="red",
-#     xlim=c(0,100),
-     las=1, 
-     breaks=50,
-     add = F)
 
+if( any(dat[,status] != 1) ){
+  hist(dat[dat[,status] != 1,survival], 
+       main="Histogram censored observations", 
+       xlab=survival, 
+       border="black", 
+       col="red",
+#      xlim=c(0,100),
+       las=1, 
+       breaks=50,
+       add = F)
+}
 
 print(summary(dat[,survival]))
 quantile(dat[,survival], .30)
 quantile(dat[,survival], .40)
-
-# If no status, assume all obserations are non-censored
-if( is.null(params$status) || !(params$status %in% names(dat))) {
-  status <- "status"
-  dat[status] <- 1
-  print("Assuming no subjects censored, either no status is given or status variable not found") 
-  }
-
 #Plot overall survival curve 
 survObj <- Surv(as.matrix(dat[survival]), as.matrix(dat[status]))
 plot(survfit(survObj ~ 1), xlab = "Survival", ylab= "Survival Probability", col=1, main=sprintf("Survival curve, %d cases",nrow(dat) ))
@@ -486,6 +488,8 @@ corrplot(cor(Filter(is.numeric,dat[variableSelections$multivariate]), use="pairw
    title = "Correlations for Multivariate Cox  method",
    mar = c(1,2,2,0),
    order = "hclust" )
+} else if ( length(variableSelections$multivariate) == 0 ){
+   variableSelections$multivariate <- NULL
 }
 
 ```
@@ -503,15 +507,17 @@ corrplot(cor(Filter(is.numeric,dat[variableSelections$multivariate]), use="pairw
 
 #survObjComplete <- Surv(as.matrix(datComplete[survival]),as.matrix(datComplete[status]))
 
-coxAIC <- coxph(survObj ~ ., data=dat[,variableSelections$multivariate,drop=F])
+if( !is.null(variableSelections$multivariate) ){
+  coxAIC <- coxph(survObj ~ ., data=dat[,variableSelections$multivariate,drop=F])
 
-coxStep <- stepAIC(coxAIC, direction="both", trace=0)
+  coxStep <- stepAIC(coxAIC, direction="both", trace=0)
 
-print("variables selected by stepwise AIC (not including fixed inputs)")
-print(coxStep$coefficients)
+  print("variables selected by stepwise AIC (not including fixed inputs)")
+  print(coxStep$coefficients)
 
-variableSelections$aic <- union(params$fixed_inputs, names(coxStep$coefficients))
+  variableSelections$aic <- union(params$fixed_inputs, names(coxStep$coefficients))
 
+}
 
 if(length(variableSelections$aic) >1 ){
 corrplot(cor(Filter(is.numeric,dat[variableSelections$aic]), use="pairwise"),
@@ -589,7 +595,7 @@ if(! is.null(params$status)){
   modeldata  <- datClass[classificationTrainingRows, c("survivorType",variableSelections[[jjj]])]
   weightList <- datClass[classificationTrainingRows, trainingWeights]
 } else {
-  modeldata  <- datClass[classificationTrainingRows,c("survivorType",variableSelections[[jjj]])]
+  modeldata  <- datClass[classificationTrainingRows, c("survivorType",variableSelections[[jjj]])]
   weightList <- datClass[classificationTrainingRows, trainingWeights]
 }
 
@@ -600,7 +606,11 @@ model_name <-paste("Class", names(variableSelections)[jjj], names(modelparams)[i
 print(model_name)
 set.seed(3141) #seed before train to get same subsamples
 # FIXME: @egates, RF class weights not used
-modelsClass[[model_name]] <- do.call(caret::train, c(caretparams[[iii]], list(data=modeldata, weights=weightList)))  
+modelsClass[[model_name]] <- do.call(caret::train, c(caretparams[[iii]], list(data=modeldata)))  
+
+#TODO: fix weights
+#, weights=weightList
+
 
 #Sort $pred data frame by row index
 modelsClass[[model_name]]$pred <- modelsClass[[model_name]]$pred[order(modelsClass[[model_name]]$pred$rowIndex),]
@@ -895,7 +905,11 @@ for (iii in 1:length(modelparams)){
 model_name <-paste(names(variableSelections)[jjj], names(modelparams)[iii],sep="_")
 print(model_name)
 set.seed(3141) #seed before train to get same subsamples
-models[[model_name]] <- do.call(caret::train, c(caretparams[[iii]], list(data=modeldata, weights=weightList))) 
+models[[model_name]] <- do.call(caret::train, c(caretparams[[iii]], list(data=modeldata))) 
+
+#TODO: fix weights 
+#, weights=weightList
+
 metric <- models[[model_name]]$metric
 
 #Sort $pred data frame by row index
@@ -1055,23 +1069,25 @@ p5
 
 
 #Weighted residual plot
+if(!is.null(trainingWeights)){
+  p6 <- ggplot(data=results) +
+  geom_point(aes(x=obs,y=weightedTrainingResidual, col=status)) +
+  ylab("Weight*|Residual| (training set)") +
+  scale_color_manual(values=c("red","black")) +
+  xlab(paste("Observed",survival,sep=" ")) +
+  theme_light(base_size=12)
 
-p6 <- ggplot(data=results) +
-geom_point(aes(x=obs,y=weightedTrainingResidual, col=status)) +
-ylab("Weight*|Residual| (training set)") +
-scale_color_manual(values=c("red","black")) +
-xlab(paste("Observed",survival,sep=" ")) +
-theme_light(base_size=12)
+  p7 <- ggplot(data=results) +
+  geom_point(aes(x=obs,y=weightedTestingResidual, col=status)) +
+  ylab("Weight*|Residual| (testing set)") +
+  scale_color_manual(values=c("red","black")) +
+  xlab(paste("Observed",survival,sep=" ")) +
+  theme_light(base_size=12)
 
-p7 <- ggplot(data=results) +
-geom_point(aes(x=obs,y=weightedTestingResidual, col=status)) +
-ylab("Weight*|Residual| (testing set)") +
-scale_color_manual(values=c("red","black")) +
-xlab(paste("Observed",survival,sep=" ")) +
-theme_light(base_size=12)
+  p6
+  p7
 
-p6
-p7
+}
 
 ```
 
@@ -1196,11 +1212,15 @@ datFull[which(datFull$validationFolds == params$foldID), predname] <- validation
 print("summary of predictions:")
 
 if(!is.null(params$foldID)){
-  kable(datFull[,c(survival,status,predname,finalpredname)])
-} else {
-  print(kable(datFull[,c(survival,status,finalpredname)]))
+
+  print( ifelse(is.null(status),
+                kable(datFull[,c(survival,status,finalpredname)]),
+                kable(datFull[,c(survival,       finalpredname)]))
+       )
 
   # HACK: @egates1 how do you want to add this global search?
+ 
+  if(!is.numeric(datFull[,finalpredname]) ){ #error handle for regression case
   for(iii in seq(from=10, to=100, by=10))
    {
     print(paste0(iii,"\n"))
@@ -1219,7 +1239,7 @@ if(!is.null(params$foldID)){
     outputsummaryfile =  paste0(params$summaryfilebase ,iii,'.csv')
     write.csv(rbind(rocfromthreshold$auc,PR1$auc.integral), row.names=TRUE, outputsummaryfile  )
    }
-
+}
 }
 
 
