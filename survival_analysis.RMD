@@ -632,18 +632,30 @@ acc[[model_name]] <- max(modelsClass[[model_name]]$results[metric])
 
 #}
 
+accs_with_ci =data.frame( lapply(modelsClass,function(x) confusionMatrix(x$pred$pred,reference = x$pred$obs, positive = timelabs[length(timelabs)])$overall))
+
+
 # print all model accuracies
 print(sprintf("%d rows used for classification", nrow(modeldata)))
 print("Table of accuracies by model and input variables")
+
 kable(unlist(acc))
+# table with all accuracy data
+kable(accs_with_ci)
+
+
 print(bestClassifier)
 print(caret::confusionMatrix(resultsClass$pred, reference = resultsClass$obs, positive = timelabs[length(timelabs)]) )
 
 if(length(timelabs) == 2){
 # FIXME: @egates1, can you generalize the predictor input? 
-ROCdropcensor <- roc(response = resultsClass$obs, levels = timelabs, predictor = resultsClass[,timelabs[length(timelabs)]])
+ROCdropcensor <- roc(response = resultsClass$obs, levels = timelabs, predictor = resultsClass[,timelabs[length(timelabs)]], ci=T, of="auc")
+# seed the bootstrap ROC interval
+set.seed(555)
+spec.ci = ci.se(ROCdropcensor, specificities = seq(0,1,0.05), boot.n=500)
 print(ROCdropcensor)
-plot(ROCdropcensor, main="Only observations used for model building") 
+plot(ROCdropcensor, print.auc=T,main="Only observations used for model building")
+plot(spec.ci,type="shape", col="lightgray") 
 print("")
 
 dropcensoraccuracy = (ROCdropcensor$specificities * sum(ROCdropcensor$response==ROCdropcensor$levels[1]) + ROCdropcensor$sensitivities * sum(ROCdropcensor$response==ROCdropcensor$levels[2]) ) / length(ROCdropcensor$response)
