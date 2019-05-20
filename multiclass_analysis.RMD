@@ -1,0 +1,876 @@
+---
+title: "Classification Analysis"
+output: pdf_document
+params:
+  csvPath:          exampledata.csv
+  outCsvName:       !r NULL
+  target:           !r NULL
+  regexp:           original
+  fixed_inputs:     !r NULL
+  exclude_inputs:   !r NULL  
+  weights:          !r NULL
+  positive_class:   !r NULL
+  hierarch:         !r FALSE
+  nfold:            !r NULL
+  leaveOneOut:      !r TRUE 
+  foldID:           !r NULL
+  summaryfilebase:  !r NULL
+  cutoff:              0.7
+  boruta:           !r TRUE
+  univariate:       !r TRUE
+  removeCorrelated: !r TRUE
+  rescale:          !r FALSE
+  plot:             !r TRUE
+  breaks:           !r NULL
+
+---
+## Classification (2+ classes)
+
+Input parameter descriptions:
+
+target is the name of the variable with classification labels, if a numeric colums is supplied it is converted to classes using the "breaks" parameter
+
+outCsvname is the file name/path for thesamed csv with validation predictions. If null, uses the input csv name as a base
+
+regexp parameter is a regular expression to get input features
+
+fixed_inputs is a regular expression that provides clinical inputs (age, kps, etc.) to bypass variable selection and are used in every survival model.
+
+weights should be the name of a single column with numeric weights to use in model training.
+
+exclude_inputs (regexp) are features known to be outliers and are excluded from inputs that match regexp:
+
+breaks are time breakpoints (careful with units)! for short/mid/long survivival times. Current code can only handle either two categories ( breaks=c(-Inf,10,Inf) ) or three categories: breaks=c(0,10,15,Inf)
+
+hierarch adds predicted survivor type to all regresion modeling by adding predictedSurvivorType to fixed_inputs
+
+cutoff is a correlation threshold that roughly defines equivalent variables. It is used to 1) to filter inputs before boruta method, 2) determine how manysimilar variables to the final model inputs to print. Recommended to keep >0.7
+
+nfold breaks the data into n evenly distrubuted folds. Used with foldID to holdout an independent test set. This is held out for the entire script and used to benchmark the accuracy of the final model.
+
+foldID (ex. 4) is used as the hold out set and the full script is run on just the remaining data (ex. fold 1,2,3 and 5 if nfold=5). Default NULL uses all folds as training.
+
+See link on imbalanced data:
+
+https://www.kaggle.com/lct14558/imbalanced-data-why-you-should-not-use-roc-curve
+
+https://acutecaretesting.org/en/articles/precision-recall-curves-what-are-they-and-how-are-they-used
+
+# Compiled: `r format(Sys.time(), "%Y-%b-%d %H:%M:%S")` 
+
+
+Print params to stdout: `r print(params)` 
+
+
+```{r libs, echo=FALSE}
+
+# install.packages("PRROC",repos='http://cran.us.r-project.org')
+libs <- c("corrplot", "ggplot2", "caret", "knitr", "MASS", "Boruta", "gridExtra", "randomForest","reshape2","glmnet", "pROC", "PRROC")
+
+invisible(lapply(libs, require,character.only=T))
+
+# seed for reproducibility.
+set.seed(25)
+
+```
+
+## A summary of the data:
+Please note: to remove missign NA values from the data individual cases with missing values are removed.
+Future versions may allow a choice to remove inputs (columns) or cases (rows)
+
+```{r Loading Data and Summary, echo=FALSE, warning=FALSE, message=FALSE, fig.width=6, fig.height=7}
+
+# load data
+datFull <- read.csv(params$csvPath)
+
+
+# REV: 
+target <- params$target
+inputs <- union(params$fixed_inputs,
+                grep(params$regexp, names(datFull),value=T))
+
+#get weights for training data
+if(!is.null(params$weights) ){
+  trainingWeights <- params$weights
+
+  if(!trainingWeights %in% names(datFull) || !is.numeric(datFull[,trainingWeights])){
+    stop("weight parameter is not the name of a numeric column")
+  }
+} else {
+  trainingWeights <- NULL
+}
+
+
+print(sprintf("%d rows and %d columns read from csv file: %s", nrow(datFull), ncol(datFull), params$csvPath))
+print(sprintf("%d inputs found with regexp parameter and fixed inputs", length(inputs)))
+
+
+# remove excluded inputs if defined
+if (!is.null(params$exclude_inputs)){
+  inputs <- union( setdiff(inputs, grep(params$exclude_inputs, names(datFull),value=T)), params$fixed_inputs)
+  print(sprintf("%d inputs remained after excluded inputs", length(inputs)))
+} else {
+  print("No excluded_inputs from parameters")
+}
+
+
+# remove unnecessary columns and clean NAs
+datCrop <- datFull[,c(inputs,target,trainingWeights)]
+
+
+
+#remove incomplete cases
+incompCases <- !complete.cases(datCrop)
+print("The following rows are excluded for missing data:")
+print(row.names(datFull)[incompCases])
+
+datCompleteCases <- datCrop[!incompCases,]
+
+if(nrow(datCompleteCases) < 5){
+  stop("Less than 5 rows had no missing input values")
+}
+
+# remove inputs with NA or infinite values (should do nothing if complete cases was applied)
+dat <- datCompleteCases[, (colSums(is.na(datCompleteCases)) == 0 ) & (sapply(datCompleteCases, function(x) sum(is.infinite(x)) ) == 0) ]
+
+
+#REV convert to factor is not already
+# if integers, do simple factor conversion 
+mybreaks = NULL
+if (is.numeric(dat[,target])){
+
+  if (all( dat[,target]%%1 == 0) ){
+    print("Coercing integer target to factor")
+    classType <- as.factor(dat[,target])
+    print(levels(classType))
+
+  } else if (!is.null(params$breaks) ){
+    mybreaks = params$breaks
+    print("Converting target variable to clases using breaks")
+
+  } else {
+    print("No breaks given, using median")
+    mybreaks = c(-Inf,median(dat[,target]),Inf)
+  }
+
+
+  if(!is.null(mybreaks) ){
+    if( any(mybreaks %in% dat[,target]) ){warning("One target value is exactly coincident with a break value, this will create a NA")}
+
+      timelabs <- paste0("Class",1:(length(mybreaks)-1))
+
+      classType = cut(as.matrix(dat[,target]), breaks = mybreaks,
+                        labels=timelabs
+                        )
+
+  }
+
+  #Reasign target to class column
+   target <- paste0(target,"Class")
+   dat    [             ,target] <- classType
+   datFull[rownames(dat),target] <- classType
+} else {
+ 
+  timelabs <- levels(dat[,target])
+
+}
+
+# subset based on validation set if provided
+if(!is.null(params$foldID)){
+  set.seed(5)
+#TODO: translate validation indices back to full data frame
+  
+  if(!("validationFolds" %in% names(dat)) ){
+    datFull$validationFolds <- rep(NA,nrow(dat))
+    validationFolds <- createFolds(dat[,target],k=params$nfold,list=F)
+    
+    # add kfold indices to data matrix
+    dat$validationFolds <- validationFolds
+    dat[row.names(dat),"validationFolds"] <- validationFolds
+
+  } else {
+    print(sprintf("validationFolds column already exists in the csv, reading it instead of generating folds."))
+    dat$validationFolds <- datFull[row.names(dat),"validationFolds"]
+  }
+
+  validationidx <- which(validationFolds == params$foldID) #gives row numbers (not row names), this will not match the original (nonfiltered) data
+  print(paste("Leaving out ", params$validationID, " fold number ", params$foldID,sep=""))
+
+  #bad code: order of these two lines matters
+  validationdat <- dat[validationidx,] 
+
+  print("removing validation fold from data frame")
+  dat <- dat[-validationidx,]
+}
+
+
+
+
+# create data split for LOOCV or k-fold
+if(params$leaveOneOut) {
+  TrainingFolds <- lapply(1:nrow(dat),function(x) setdiff(1:nrow(dat), x))
+} else {
+  #default else use 5 fold
+  set.seed(12)
+  classificationTrainingFolds <- createFolds(dat[,target],
+                                             k=ifelse(is.null(params$nfold),5,params$nfold),
+                                             list=TRUE,
+                                             returnTrain=TRUE)
+}
+
+print("List of training data used for each fold of CLASSIFICATION cross validation:")
+ifelse(params$leaveOneOut,print("Leave-One-Out"),print(classificationTrainingFolds))
+
+# Summary of each class
+print(summary(dat[,target]))
+
+
+```
+
+## Mass plotting of histograms can be disabled with the _plot_ parameter
+
+`r length(inputs)` inputs are used for initial analysis.
+
+```{r Input Histograms, echo=FALSE, warning=FALSE, message=FALSE, fig.width=3.5, fig.height=5}
+
+if (length(inputs) > 500) {warning("greater than 500 inputs for plotting!!")}
+
+if(params$plot){
+
+  for (varname in inputs) {
+
+    if(!is.factor(dat[,varname])){
+
+      maxrow <- which(dat[,varname] == max(dat[,varname]))
+      hist(dat[,varname], col="gray", main = paste("All observations\nMax in row:", maxrow), xlab=varname)
+#      plot(dat[dat[,status]==1,varname], dat[dat[,status]==1,survival], xlab=varname, ylab=survival, pch=21, bg='gray',col='black', main=sprintf("Pearson r: %0.3f, non-censored only",cor(dat[dat[,status]==1,varname],dat[dat[,status]==1,survival],method="pearson")))
+      boxplot(as.formula(paste(varname,target,sep="~")), data=dat, col="gray", xlab=target, ylab = varname
+#             ,main=sprintf("Pearson r on non-censored: %0.3f,\nunfilled=censored",cor(dat[regressionTrainingRows,varname],dat[regressionTrainingRows,survival],method="pearson"))
+             )
+      print(summary(dat[,varname]))
+    }
+  }
+}
+
+```
+
+## Variable Modeling:
+
+ First we determine which variables are univariate correlated with the target using the Wilcoxon tests.
+
+ Next we use a multiple input cox model and stepwise AIC on the result.
+
+ Bouta method (with correlation reduction) can be used with the _boruta_ parameter.
+
+```{r Univariate Filter, echo=FALSE, warning=FALSE, message=FALSE, fig.width=6, fig.height=7}
+
+variableSelections <- list()
+
+#use fixed only if length > 1 (avoid bugs)
+scopefixed_inputs = NULL 
+if(!is.null(params$fixed_inputs) ){
+  scopefixed_inputs = params$fixed_inputs 
+  variableSelections$fixed <- params$fixed_inputs
+}
+
+
+
+#list of formulas, inputs automatically includes fixed inputs
+univFormulas <- sapply(inputs, function(x) as.formula(paste(x,target,sep="~")))
+
+#list of models
+KruskalUniModels <- lapply(univFormulas,
+       function(x) { kruskal.test(x, data=dat) }
+)
+
+univPvals <- lapply(KruskalUniModels, function(x) x$p.value)
+
+#TODO: change p value threshold
+variableSelections$univariate <- union(params$fixed_inputs, inputs[which(univPvals < 0.1)]) #discard variables above threshold (also handles NAs)
+
+print("Univariate significant variables via Kruskal Wallis test:")
+print(variableSelections$univariate)
+
+if(length(variableSelections$univariate)>1){
+corrplot(cor(Filter(is.numeric,dat[variableSelections$univariate]), use="pairwise"),
+   title = "Correlations for Kruskal Univariate method",
+   mar = c(1,2,2,0),
+   order = "hclust" )
+
+print("  ")
+}
+
+```
+
+
+# Additional variable selection based on linear correlation and Boruta method if enabled:
+```{r Boruta Variable, echo=FALSE, warning=FALSE, message=FALSE, fig.width=6, fig.height=7}
+
+print("Pre-processing to remove correlated variables before Boruta method")
+#pre-process with correlations
+ppMethods <- "zv"
+if(params$rescale)          {ppMethods <- c(ppMethods,"center","scale")}
+
+# BUG: "zv" and "corr" do not work together for some inputs...
+#if(params$removeCorrelated) {ppMethods <- c(ppMethods, "corr")}
+
+Filteredinputs <- setdiff(inputs,params$fixed_inputs)
+
+
+#apply correlation removal (not to fixed inputs)
+
+if(length(Filteredinputs)>1){
+  pp <- preProcess(dat[,Filteredinputs], method = ppMethods, cutoff=params$cutoff)
+
+  print(pp)
+
+  #get reduced input set/dataset
+  borutaInputs <- union( names(predict(pp, newdata = dat[,Filteredinputs])), params$fixed_inputs)
+} else {
+  print("Only 1 input, no correlation reduction before boruta")
+  borutaInputs <- union(Filteredinputs,params$fixed_inputs)
+}
+
+
+
+if(params$boruta){
+
+#TODO: document boruta "Confirmed" vs "Tentative"
+bor <- Boruta(x=dat[, borutaInputs ], y=dat[, target], pValue=.35)
+variableSelections$boruta <- union(params$fixed_inputs, names(dat[,borutaInputs ])[which(bor$finalDecision == "Confirmed")])
+
+#if boruta rejects everything, remove it from selections
+if(!any(bor$finalDecision=="Confirmed") ) {
+  print("Boruta rejected every variable, removing boruta selection from list of variables")
+  variableSelections$boruta <- NULL
+}
+
+
+print("Finished Boruta variable selection")
+print(bor)
+
+
+if(length(variableSelections$boruta) > 1 & params$plot){
+
+correlations <- cor(Filter(is.numeric,dat[,variableSelections$boruta]), use="pairwise")
+   corrplot(correlations,
+   title = "Correlations for Boruta method",
+   mar = c(1,2,2,0),
+   order = "hclust"  )
+
+print("  ")
+
+}
+}
+
+#WIP: disable linear correlation for now
+# Univariate (correlation) selection
+#if(params$univariate){
+#
+#nums <- sapply(dat[inputs],is.numeric)
+#nums <- names(nums)[nums] #get names not T/F
+#pvals <- lapply(nums,
+#       function(var) {          
+#           test <- cor.test(dat[dat[,status]==1, c(var)], dat[dat[,status]==1, survival])
+#           test$p.value #could use 1-pchisq(test$statistic, df= test$parameter)
+#       })
+#names(pvals) <- nums
+
+#TODO: adjust p-value threshold with parameter
+#pvalThresh <- 0.15
+#print(sprintf("p-value threshold for Kruskal Wallis, %f",pvalThresh))
+#variableSelections$univariate <- union(nums[which(pvals < pvalThresh)], params$fixed_inputs) #discard variables above threshold
+#
+#if(length(variableSelections$univariate) >1 ){
+#corrplot(cor(Filter(is.numeric,dat[dat[,status]==1,variableSelections$univariate]), use="pairwise"),
+#   title = "Correlations for Linear Univariate method",
+#   mar = c(1,2,2,0),
+#   order = "hclust" )
+#}
+#}
+
+```
+
+
+## WIP: Further reduce the number of variables by making a multivariate  model and checking for high correlations
+
+```{r Multivariate, echo=FALSE, warning=FALSE, message=FALSE, fig.width=6, fig.height=7}
+#WIP: how to do multivariate selection?
+#uniInputs <- variableSelections$univariate
+
+#coxMultiModel <- coxph(survObj~., data=dat[,union(params$fixed_inputs,uniInputs),drop=F])
+#multiPvals <- coef(summary(coxMultiModel))[,5]
+
+#print("Multivariate cox model")
+#print(coxMultiModel)
+
+
+#variableSelections$multivariate <- union(params$fixed_inputs, names(multiPvals)[na.omit(multiPvals < 0.05)])
+
+#TODO: correct for multiple comparisons
+
+
+#if(length(variableSelections$multivariate) >1 ){
+#corrplot(cor(Filter(is.numeric,dat[variableSelections$multivariate]), use="pairwise"),
+#   title = "Correlations for Multivariate Cox  method",
+#   mar = c(1,2,2,0),
+#   order = "hclust" )
+#}
+
+```
+# WIP: Filter the model using stepwise AIC or recursive feature elimination. RFE must be performed AFTER model training
+
+
+```{r stepwise AIC, echo=FALSE, warning=FALSE, message=FALSE, fig.width=6, fig.height=7}
+
+#need to make the model on complete cases only
+
+#ENH: dat should already be complete cases only
+# datComplete <- dat[complete.cases(dat[,c(status,survival,variableSelections$multivariate)]) ,
+#                                       c(status,survival,variableSelections$multivariate)    ]
+#
+
+#survObjComplete <- Surv(as.matrix(datComplete[survival]),as.matrix(datComplete[status]))
+
+#coxAIC <- coxph(survObj ~ ., data=dat[,variableSelections$multivariate,drop=F])
+
+#coxStep <- stepAIC(coxAIC, direction="both", trace=0)
+
+#print("variables selected by stepwise AIC (not including fixed inputs)")
+#print(coxStep$coefficients)
+
+#variableSelections$aic <- union(params$fixed_inputs, names(coxStep$coefficients))
+
+
+#if(length(variableSelections$aic) >1 ){
+#corrplot(cor(Filter(is.numeric,dat[variableSelections$aic]), use="pairwise"),
+#   title = "Correlations for stepwise AIC method",
+#   mar = c(1,2,2,0),
+#   order = "hclust" )
+#}
+```
+
+
+# Modeling using different model/variable combinations
+ 
+```{r Classification, echo=FALSE, warning=FALSE, message=FALSE, fig.width=6, fig.height=7}
+
+#TODO: adjust models based on number of survivor categories (i.e. binary)
+
+modelparams <- list(forest = list(method      = "rf",
+                                  ntree       = 500,
+                                 #tuneGrid    = data.frame(.mtry = mtry),
+                                 #replace    = TRUE,
+                                 #na.action  = randomForest::na.roughfix,
+                                 importance  = FALSE,
+                                 predict.all = FALSE
+                                 ),
+#                    xgboost = list(method = "xgbTree"),
+                    #nnet = list(method = "nnet",
+                    #             #tuneGrid=data.frame(.size = 10, .decay = 0),
+                    #             #linout  = TRUE,
+                    #             skip    = TRUE,
+                    #             MaxNWts = 10000,
+                    #             trace   = FALSE,
+                    #             maxit   = 100),
+                     svm = list(method = "svmRadial"),
+                     gausspr = list(method="gaussprRadial")#,
+                     )
+
+# LOGIT (glm) only uses two outputs
+if( length(levels(dat[,target])) ==2 ){ modelparams$logit = list(method="glm") }
+
+
+modelformula <- as.formula(paste0(target,"~."))
+dataparams   <- list(form = modelformula,
+                      metric="Accuracy",
+                      trControl=trainControl(allowParallel  = T,
+                                             method = ifelse(params$leaveOneOut,"LOOCV", "repeatedcv"),
+                                             classProbs=TRUE,
+                                             returnResamp = "final",
+                                             savePredictions = "final",
+                                             index = classificationTrainingFolds,                                                                     #number = 10,
+                                             verboseIter = F) # use method="none" to disable grid tuning for speed
+                     )  
+caretparams      <- lapply(modelparams,function(x) c(dataparams,x))
+
+#initialize outputs
+
+modelsClass   <- list()
+acc <- list()
+
+for(jjj in 1:length(variableSelections)){
+
+  modeldata  <- dat[, c(target,variableSelections[[jjj]])]
+  if(!is.null(trainingWeights)){
+    weightList <- dat[, trainingWeights]
+  } else {
+    weightList = NULL
+  }
+
+# RE seeding: Hawthorn et al, "The design and analysis of benchmark experiments" (2005)
+
+  for (iii in 1:length(modelparams)){
+    model_name <-paste("Class", names(variableSelections)[jjj], names(modelparams)[iii],sep="_")
+    print(model_name)
+    set.seed(3141) #seed before train to get same subsamples
+# FIXME: @egates, RF class weights not used
+    modelsClass[[model_name]] <- do.call(caret::train, c(caretparams[[iii]], list(data=modeldata, weights=weightList)))  
+    metric <- modelsClass[[model_name]]$metric
+
+#get best acuracy manually for LOOCV
+    acc[[model_name]] <- max(modelsClass[[model_name]]$results[metric])
+
+  }
+}
+
+#TODO: enable k-fold, check if this works with not LOOCV
+#if(params$leaveOneOut){
+  maxacc <- max(unlist(acc))
+  maxmodels <- names(which(acc==maxacc))
+  bestClassifier <- modelsClass[[maxmodels[[1]]]] #pick first by default
+  resultsClass <- bestClassifier$pred
+
+#}
+
+# print all model accuracies
+print(sprintf("%d rows used for classification", nrow(modeldata)))
+print("Table of accuracies by model and input variables")
+kable(unlist(acc))
+print(bestClassifier)
+
+#assumes fist level to be positive class unless specified
+print(caret::confusionMatrix(resultsClass$pred, reference = resultsClass$obs, positive = ifelse(is.null(params$positive_class),levels(dat[,target])[1],params$positive_class) ))
+
+
+if(length(levels(dat[,target])) == 2){
+# FIXME: @egates1, can you generalize the predictor input? 
+# TODO: update ROC analysis (no 'long' level by default)
+ROCdropcensor <- roc(response = resultsClass$obs, levels = timelabs, predictor = resultsClass[,timelabs[1]])
+print(ROCdropcensor)
+plot(ROCdropcensor) 
+print("")
+
+dropcensoraccuracy = (ROCdropcensor$specificities * sum(ROCdropcensor$response==ROCdropcensor$levels[1]) + ROCdropcensor$sensitivities * sum(ROCdropcensor$response==ROCdropcensor$levels[2]) ) / length(ROCdropcensor$response)
+plot(ROCdropcensor$thresholds,dropcensoraccuracy , xlab = "probability threshold", ylab= "Accuracy" )
+
+# confusion matrix at max
+idmax = which(dropcensoraccuracy ==max(dropcensoraccuracy ))
+maxthreshold = ROCdropcensor$thresholds[idmax ]
+print(caret::confusionMatrix( factor(ifelse( resultsClass[,timelabs[1]] < maxthreshold , timelabs[1],timelabs[length(timelabs)]), levels=timelabs), reference = resultsClass$obs, positive = timelabs[length(timelabs)]) )
+
+
+}
+
+print("Concordance < 0.5 may be due to improper factor level ordering")
+
+#Add predictions on censored data as well
+fullClassPreds <- factor(levels = levels(dat[,target]))
+
+fullClassPreds[bestClassifier$pred$rowIndex] = bestClassifier$pred$pred
+
+
+# add predictions to variable selections if hierarchical
+
+if(params$hierarch){
+print("Adding predSurvivorType to all input sets")
+variableSelections <-  lapply(variableSelections, function(x) c("predSurvivorType",x))
+inputs <- c(inputs,"predSurvivorType")
+}
+
+#This line is the one that needs LOOCV
+dat$predSurvivorType <- fullClassPreds
+
+```
+
+# ROC analysis if only 2 classes 
+
+```{r ROC analysis if only by grouping into 2 classes, echo=FALSE}
+#WIP - @egates1 - for multi-class, need 1 ROC for each class, 0 = the class prediction, 1 = everything else
+#check if binary short/long survival
+#note: roc(response ~ predictor1 + predictor2) can perform multiple univariate ROCs and returns a list
+classlabs <- levels(dat[,target])
+
+
+if( length(classlabs) >2) {
+  ROCs <- lapply(classlabs, function(x) roc(response = factor(ifelse(dat[,target] == x, x,"other"), levels=c(x,"other")),
+                                            levels = c(x,"other"),
+                                            predictor = bestClassifier$pred[,x]
+                                            )
+                )
+  names(ROCs) <- classlabs
+
+
+# plot/print ROCs
+for(rr in ROCs){
+  plot(rr, main=paste0(levels(rr$response)[[1]], " vs others") )
+  print(rr)
+}
+
+} else {
+  probLong <- bestClassifier$pred[,classlabs[2]]
+  ROC1 <- roc(response = dat[,target],
+                         levels = classlabs,
+                         predictor = probLong)###
+  print(ROC1)
+  plot(ROC1)
+  print("")
+
+# plot accuracy
+  fulldataaccuracy = (ROC1$specificities * sum(ROC1$response==ROC1$levels[1]) + ROC1$sensitivities * sum(ROC1$response==ROC1$levels[2]) ) / length(ROC1$response)
+  plot(ROC1$thresholds,fulldataaccuracy, xlab = "probability threshold", ylab= "Accuracy" )
+
+# confusion matrix at max
+  idmax = which(fulldataaccuracy ==max(fulldataaccuracy ))
+  maxthreshold = ROC1$thresholds[idmax ]
+  print(caret::confusionMatrix( factor(ifelse( probLong < maxthreshold , timelabs[1],timelabs[length(timelabs)]),levels=timelabs), reference = dat[,target],  positive = timelabs[length(timelabs)]) )
+
+}
+
+# TODO
+#  use RF on fixed variables as reference control
+if(!is.null(scopefixed_inputs) ){
+  fixedClassPreds <- numeric()
+  fixedClassifier <- modelsClass$Class_fixed_forest
+  fixedClassPreds = fixedClassifier$pred[,classlabs[2]] #get probabilistic output not response
+
+rocFixed <- roc(response = dat[,target],
+                levels = classlabs,
+                predictor = fixedClassPreds)###
+
+print(rocFixed)
+plot(rocFixed)
+print("")
+
+}
+
+
+```
+# CURRENTLY DISABLED:
+# Next: build a model using only on the cases from the same predicted class. We also train a linear model in the same way for comparison.
+
+```{r Hierarchical Linear and cox predictions, echo=FALSE, warning=FALSE, message=FALSE}
+
+#HACK disable
+#TODO: review and reenable this code
+if(FALSE){
+#pseudo-code
+#  split data uing best classifier
+#  for each class build a linear model
+#  predict on hold out
+hierarchPreds <- numeric(nrow(dat))
+
+#fit model with data subset
+linMod <- lm( as.formula(paste(target,"~.")), data=trainingData)
+hierarchPreds[nn] <- predict(linMod,dat[nn,])
+
+}
+
+
+
+```
+
+```{r Modeling (may take some time), echo=FALSE, warning=FALSE, message=FALSE}
+```
+
+# Finding the best model for continuous predictions:
+
+```{r Finding best model and plotting, echo = FALSE, fig.width=8, fig.height=10}
+```
+
+```{r Output model,echo = FALSE}
+
+
+# Add predictions on censored data
+fullPreds <- numeric(nrow(dat))
+
+fullPreds = bestClassifier$pred$pred #LOOCV on non-censored
+
+
+
+
+
+
+print("Best model(s) and their inputs (ignore .outcome, it is not used in training)")
+lapply(maxmodels, function(x) {print(x); print(modelsClass[[x]]); names(modelsClass[[x]]$trainingData)})
+
+# TODO add more plots specific to classifier (to replace error plots)
+
+```
+
+# Equivalent variables: defined by tight correlation
+correlation cutoff: `r params$cutoff`
+
+
+```{r Equivalent variables, echo=FALSE}
+finalVars <- names(bestClassifier$trainingData)[-1]
+
+print("Best variable Set:")
+print(finalVars)
+
+equivalentVars <- list()
+cormat <- cor(dat[,inputs])
+
+for(nam in finalVars){
+  #check for correlation
+  corVars <- cormat[cormat[,nam]>params$cutoff,nam,drop=F]
+
+  equivalentVars[[nam]] = corVars
+
+print(paste("Variables correlated with: ",nam,sep=""))
+#kable(corVars)
+print(corVars)
+
+corrplot(cormat[cormat[,nam]>params$cutoff,cormat[,nam]>params$cutoff,drop=F])
+
+}
+
+```
+
+
+
+
+# Predictions on validation set using the holdout and the best classifiers and 
+# WIP: revise this section to remove survival references
+holdout fold: `r params$foldID`
+
+```{r validation set, echo=FALSE}
+
+if(!is.null(params$foldID)){
+if(FALSE){
+
+validationdat$predType <- predict(bestClassifier,newdata=validationdat)
+validationdatReduced <- validationdat[,c(finalVars,target)]
+validationpreds <- predict(bestmod, newdata=validationdatReduced)
+
+#get validation accuracy
+
+realClass <- cut(validationdat[,survival], breaks = params$breaks,
+                   labels=timelabs
+                  )
+
+
+predType = cut(as.matrix(validationpreds), breaks = params$breaks,
+                   labels=timelabs
+                  )
+
+print("CONFUSION MATRIX FOR CONTINUOUS PREDICTIONS")
+print( confusionMatrix(reference=realClass,predType) )
+
+print("CONFUSION MATRIX FOR CLASSIFIER")
+
+print( confusionMatrix(reference=realClass,validationdat$predSurvivorType) )
+
+print("Table of predictions and actual values for reference")
+print(sprintf("correlation (R-squared): %0.4f", cor(validationdatReduced[,survival],validationpreds)^2))
+print(sprintf("RMSE: %0.4f", sqrt(mean((validationdatReduced[,survival]-validationpreds)^2))))
+
+
+kable(data.frame(Actual=validationdatReduced[,survival],PredictedContinuous=validationpreds,PredictedClassContinuous=predType, ActualClass=realClass, PredictedClassClassifier=validationdat$predSurvivorType))
+
+}
+}
+
+```
+
+# Writing csv files with validation predictions
+
+```{r write csv, echo=FALSE}
+
+#write cross-validation predictions
+
+
+if(!is.null(params$foldID)){
+  finalpredname <- paste("LOOCVPreds_exceptfold",params$foldID,sep="")
+
+  if(finalpredname %in% names(datFull)){
+    print(sprintf("cross-validation predictions for fold %s already found, compare differences below:", params$foldID))
+    print("existing predictions (may be out of order):")
+    kable(data.frame(existing=datFull[rownames(dat),finalpredname],new=results$pred))
+    
+  } else {
+  datFull[finalpredname] <- NA
+  datFull[rownames(dat)[results$rowIndex],finalpredname] <- results$pred  #trickey line of code since results$rowIndex referes to rows of dat not datFull
+    }
+
+} else { #if no validation fold, write all predictions
+  finalpredname <- "finalPredictions"
+  datFull[,finalpredname] <- NA
+  datFull[rownames(dat),finalpredname] <- fullPreds  #trickey line of code since results$rowIndex referes to rows of dat not datFull
+}
+
+
+# write validation predictions
+if(!is.null(params$foldID)){
+
+predname <- paste("validationPreds_fold",params$foldID,sep="")
+
+
+  if(predname %in% names(datFull)){
+    print(sprintf("Validation predictions for fold %s already found, compare differences below:", params$foldID))
+    print("existing predictions:")
+    print(datFull$predname)
+  } else {
+
+datFull[predname] <- NA
+datFull[which(datFull$validationFolds == params$foldID), predname] <- validationpreds
+  }
+}
+
+print("summary of predictions:")
+
+if(!is.null(params$foldID)){
+  kable(datFull[,c(target,predname,finalpredname)])
+} else {
+  print(kable(datFull[,c(target,finalpredname)]))
+
+  # HACK: @egates1 how do you want to add this global search?
+#  for(iii in seq(from=10, to=100, by=10))
+#   {
+#    print(paste0(iii,"\n"))
+#    rocfromthreshold = roc(datFull[,target] < iii, datFull[,finalpredname] ); 
+#    plot(rocfromthreshold)
+#    print( rocfromthreshold)
+
+    # https://towardsdatascience.com/what-metrics-should-we-use-on-imbalanced-data-set-precision-recall-roc-e2e79252aeba
+    #  Using packace "PPROC"
+
+    #May give "NA" if NAs are present, currently hacked to remove NA predictions
+#    PR1 <- pr.curve(weights.class0=as.numeric(datFull[!is.na(datFull[,finalpredname]),survival] < iii), scores.class0=na.omit(datFull[,finalpredname]), curve=T)
+#    plot(PR1)
+#    print(PR1)
+    # HACK - @egates1 need access to the output_file variable from the command line input
+#    outputsummaryfile =  paste0(params$summaryfilebase ,iii,'.csv')
+#    write.csv(rbind(rocfromthreshold$auc,PR1$auc.integral), row.names=TRUE, outputsummaryfile  )
+#   }
+#
+}
+
+
+if(is.null(params$outCsvName)){
+  print("No output csv file specified")
+
+# Option to auto generate csv name
+#  if(!is.null(params$foldID)){
+#    outCsv <- sub(".csv",sprintf("_Fold%s_validation.csv",params$foldID),basename(params$csvPath)) 
+#  } else {
+#    outCsv <- sub(".csv","_no_validation.csv",basename(params$csvPath))
+#  }
+ 
+} else {
+    outCsv <- params$outCsvName
+
+  
+print(sprintf("writing csv with validation predictions to %s", outCsv))
+write.csv(datFull,outCsv,row.names=F)
+}
+
+```
+
+
+
+
+
+
+
+
